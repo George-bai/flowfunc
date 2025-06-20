@@ -79,4 +79,4 @@ def run(nclicks, nodes):
 
 
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run(debug=True, port=8050, use_reloader=True)

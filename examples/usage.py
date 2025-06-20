@@ -141,4 +141,4 @@ def update_output(contents, nclicks, nodes):
 
 
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run(debug=True, use_reloader=True)
