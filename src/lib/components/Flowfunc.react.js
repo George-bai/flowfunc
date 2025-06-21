@@ -21,6 +21,7 @@ export default class Flowfunc extends Component {
     this.container = React.createRef();
     this.ukey = (new Date()).toISOString();
     this.localSelectedNodes = new Set();
+    this.fitToViewScale = this.props.initial_scale || 1;
     this.updateConfig();
   }
 
@@ -135,6 +136,9 @@ export default class Flowfunc extends Component {
       // console.log("Pushing new nodes", this.props.nodes)
       this.ukey = (Math.random() + 1).toString(36).substring(7);
     }
+    if (this.props.fit_to_view !== prevProps.fit_to_view && this.props.fit_to_view) {
+      this.performFitToView();
+    }
     this.setNodesStatus();
   }
 
@@ -159,6 +163,73 @@ export default class Flowfunc extends Component {
         // console.log(error);
       }
     }
+  }
+
+  performFitToView = () => {
+    if (!this.props.nodes || Object.keys(this.props.nodes).length === 0) {
+      return;
+    }
+    // Calculate bounds of all nodes including their dimensions
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    
+    Object.values(this.props.nodes).forEach(node => {
+      // Include the node's full dimensions in boundary calculations
+      minX = Math.min(minX, node.x);
+      minY = Math.min(minY, node.y);
+      maxX = Math.max(maxX, node.x);
+      maxY = Math.max(maxY, node.y);
+    });
+    
+    // Add padding
+    const padding = 150;
+    minX -= padding;
+    minY -= padding;
+    maxX += padding;
+    maxY += padding;
+    
+    // Get viewport dimensions
+    const viewportWidth = this.container.current.clientWidth;
+    const viewportHeight = this.container.current.clientHeight;
+    
+    // Calculate content size and scale to fit
+    const contentWidth = maxX - minX;
+    const contentHeight = maxY - minY;
+    const scaleX = viewportWidth / contentWidth;
+    const scaleY = viewportHeight / contentHeight;
+    
+    // Use the smaller scale to ensure everything fits
+    // Don't cap at 1 - we want to zoom out if needed
+    const scale = Math.min(scaleX, scaleY);
+    const finalScale = Math.max(scale, 0.1); // Minimum scale of 0.1
+    
+    // Calculate center position of the content
+    const centerX = (maxX + minX) / 2;
+    const centerY = (maxY + minY) / 2;
+    
+    // Calculate translation values to center the content in the viewport
+    const translateX = (viewportWidth / 2) - (centerX * finalScale);
+    const translateY = (viewportHeight / 2) - (centerY * finalScale);
+    
+    // Apply both scale and translation to the NodeEditor
+    if (this.nodeEditor.current && this.nodeEditor.current.setTransform) {
+      this.nodeEditor.current.setTransform({
+        x: translateX,
+        y: translateY,
+        scale: finalScale
+      });
+    }
+    
+    // Store the scale for future renders
+    this.fitToViewScale = finalScale;
+    
+    // Generate a new key to force proper re-render
+    this.ukey = (Math.random() + 1).toString(36).substring(7);
+    
+    // Trigger re-render to apply changes
+    this.forceUpdate();
   }
 
   addEventListners = () => {
@@ -202,23 +273,44 @@ export default class Flowfunc extends Component {
   render() {
     // this.nodeEditor.current.setNodes(this.props.nodes);
     const output = (
-      <div id={this.props.id} style={{ height: "100%", zIndex: -1 }} ref={this.container}>
-        <NodeEditor
-          ref={this.nodeEditor}
-          portTypes={this.flconfig.portTypes}
-          nodeTypes={this.flconfig.nodeTypes}
-          nodes={this.props.nodes}
-          defaultNodes={this.props.default_nodes}
-          context={this.props.context}
-          initialScale={this.props.initial_scale}
-          disableZoom={this.props.disable_zoom}
-          disablePan={this.props.disable_pan}
-          spaceToPan={this.props.space_to_pan}
-          onChange={this.handleChange}
-          onCommentsChange={this.handleChange}
-          key={this.ukey}
-        />
-      </div>
+      <React.Fragment>
+        <div id={this.props.id} style={{ height: "100%", position: 'relative' }} ref={this.container}>
+          <NodeEditor
+            ref={this.nodeEditor}
+            portTypes={this.flconfig.portTypes}
+            nodeTypes={this.flconfig.nodeTypes}
+            nodes={this.props.nodes}
+            defaultNodes={this.props.default_nodes}
+            context={this.props.context}
+            initialScale={this.fitToViewScale}
+            disableZoom={this.props.disable_zoom}
+            disablePan={this.props.disable_pan}
+            spaceToPan={this.props.space_to_pan}
+            onChange={this.handleChange}
+            onCommentsChange={this.handleChange}
+            key={this.ukey}
+          />
+        </div>
+        <button 
+          onClick={this.performFitToView}
+          style={{
+            position: 'fixed',
+            bottom: '20px',
+            left: '20px',
+            zIndex: 10000,
+            padding: '8px 16px',
+            backgroundColor: '#0366d6',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '14px'
+          }}
+          title="Fit to View (Ctrl+F)"
+        >
+          Fit to View
+        </button>
+      </React.Fragment>
     );
     return output;
   }
@@ -303,6 +395,10 @@ Flowfunc.propTypes = {
    */
   space_to_pan: PropTypes.bool,
 
+  /**
+   * Trigger fit to view when this prop changes to true
+   */
+  fit_to_view: PropTypes.bool,
 
   /**
    * The available port types and node types

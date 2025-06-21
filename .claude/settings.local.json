@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:flume.dev)",
+      "WebFetch(domain:github.com)",
+      "Bash(grep:*)"
+    ],
+    "deny": []
+  }
+}
