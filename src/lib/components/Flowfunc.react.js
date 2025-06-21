@@ -291,25 +291,101 @@ export default class Flowfunc extends Component {
             key={this.ukey}
           />
         </div>
-        <button 
-          onClick={this.performFitToView}
+        <div 
           style={{
             position: 'fixed',
             bottom: '20px',
             left: '20px',
             zIndex: 10000,
-            padding: '8px 16px',
-            backgroundColor: '#0366d6',
-            color: 'white',
-            border: 'none',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '2px',
+            backgroundColor: 'rgba(30, 30, 30, 0.7)',
+            padding: '3px',
             borderRadius: '4px',
-            cursor: 'pointer',
-            fontSize: '14px'
+            boxShadow: '0 2px 5px rgba(0, 0, 0, 0.2)'
           }}
-          title="Fit to View (Ctrl+F)"
         >
-          Fit to View
-        </button>
+          {/* Zoom button */}
+          <button
+            onClick={() => this.props.setProps({ disable_zoom: !this.props.disable_zoom })}
+            style={{
+              padding: '6px',
+              backgroundColor: this.props.disable_zoom ? '#555' : '#2a2a2a',
+              color: this.props.disable_zoom ? '#aaa' : '#fff',
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              width: '32px',
+              height: '32px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title={this.props.disable_zoom ? "Enable Zoom" : "Disable Zoom"}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M20 20L16 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M11 8V14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M8 11H14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+          
+          {/* Pan button */}
+          <button
+            onClick={() => this.props.setProps({ disable_pan: !this.props.disable_pan })}
+            style={{
+              padding: '6px',
+              backgroundColor: this.props.disable_pan ? '#555' : '#2a2a2a',
+              color: this.props.disable_pan ? '#aaa' : '#fff',
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              width: '32px',
+              height: '32px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title={this.props.disable_pan ? "Enable Pan" : "Disable Pan"}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M9 11.5V5.5C9 4.67157 9.67157 4 10.5 4C11.3284 4 12 4.67157 12 5.5V11" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              <path d="M12 11V7.5C12 6.67157 12.6716 6 13.5 6C14.3284 6 15 6.67157 15 7.5V11" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              <path d="M15 11V9.5C15 8.67157 15.6716 8 16.5 8C17.3284 8 18 8.67157 18 9.5V14.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              <path d="M6 12.4V14.5C6 17.5376 8.46243 20 11.5 20H12.5C15.5376 20 18 17.5376 18 14.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              <path d="M6 12.5C6 11.6716 6.67157 11 7.5 11C8.32843 11 9 11.6716 9 12.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+          </button>
+          
+          {/* Fit to View button */}
+          <button
+            onClick={this.performFitToView}
+            style={{
+              padding: '6px',
+              backgroundColor: '#2a2a2a',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              width: '32px',
+              height: '32px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title="Fit to View"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 8V4H8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M4 16V20H8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M16 4H20V8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M16 20H20V16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <rect x="8" y="8" width="8" height="8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        </div>
       </React.Fragment>
     );
     return output;
