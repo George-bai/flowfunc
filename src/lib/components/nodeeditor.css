@@ -1,6 +1,20 @@
 .active[data-flume-component="node"] > h2{
     background-color:indianred;
 }
+
+/* Remove shadow effects from node titles */
+[data-flume-component="node"] h2 {
+    text-shadow: none !important;
+}
+
+/* Port highlighting effect */
+[data-port-name][data-port-transput-type].port-highlighting {
+    transform: scale(1.2);
+    box-shadow: 0 0 8px rgba(100, 200, 255, 0.6);
+    transition: all 0.2s ease;
+    z-index: 1000;
+}
+
 .started[data-flume-component="node"] {
     border-bottom: 5px solid rgb(218, 194, 60);
 }

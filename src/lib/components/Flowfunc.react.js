@@ -4,6 +4,7 @@ import { NodeEditor } from 'flume';
 import { FlumeConfig, Colors, Controls } from 'flume'
 import PropTypes, { string } from 'prop-types';
 import { standardControls } from '../utils/Controls';
+import { usePortHighlighter } from '../hooks/usePortHighlighter';
 import "./nodeeditor.css"
 
 /**
@@ -13,12 +14,22 @@ import "./nodeeditor.css"
  * will be available as nodes which can be connected together to create a logic
  * at runtime.
  */
-export default class Flowfunc extends Component {
+// Wrapper component to use hooks with class component
+const FlowfuncWithPortHighlighter = (props) => {
+  const containerRef = React.useRef(null);
+  
+  // Use the port highlighter hook properly
+  usePortHighlighter(props.config, props.nodes, props.type_safety, containerRef);
+  
+  return <FlowfuncClass {...props} containerRef={containerRef} />;
+};
+
+class FlowfuncClass extends Component {
 
   constructor(props) {
     super(props)
     this.nodeEditor = React.createRef();
-    this.container = React.createRef();
+    this.container = this.props.containerRef || React.createRef();
     this.ukey = (new Date()).toISOString();
     this.localSelectedNodes = new Set();
     this.fitToViewScale = this.props.initial_scale || 1;
@@ -392,9 +403,9 @@ export default class Flowfunc extends Component {
   }
 }
 
-Flowfunc.defaultProps = {};
+FlowfuncClass.defaultProps = {};
 
-Flowfunc.propTypes = {
+FlowfuncClass.propTypes = {
   /**
    * The ID used to identify this component in Dash callbacks.
    */
@@ -487,3 +498,10 @@ Flowfunc.propTypes = {
    */
   setProps: PropTypes.func
 };
+
+// Copy PropTypes to wrapper component
+FlowfuncWithPortHighlighter.defaultProps = FlowfuncClass.defaultProps;
+FlowfuncWithPortHighlighter.propTypes = FlowfuncClass.propTypes;
+
+// Export the wrapper component as default
+export default FlowfuncWithPortHighlighter;

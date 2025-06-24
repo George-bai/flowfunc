@@ -3,7 +3,13 @@
     "allow": [
       "WebFetch(domain:flume.dev)",
       "WebFetch(domain:github.com)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(ls:*)",
+      "Bash(npm run build:*)",
+      "Bash(cp:*)",
+      "Bash(find:*)",
+      "Bash(rm:*)"
     ],
     "deny": []
   }
