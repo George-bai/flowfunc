@@ -86,14 +86,27 @@ export const usePortHighlighter = (config, nodes, typeSafety, editorRef) => {
       }
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e) => {
+      // Prevent infinite recursion from auto-dispatched events
+      if (e.isTrusted === false && e.type === 'mouseup') {
+        // Reset state for auto-dispatched events
+        isDraggingRef.current = false;
+        draggedPortRef.current = null;
+        if (highlightedPortRef.current) {
+          unhighlightPort(highlightedPortRef.current);
+        }
+        return;
+      }
+      
       if (isDraggingRef.current && highlightedPortRef.current) {
         // Auto-connect by dispatching mouseup on highlighted port
         const rect = highlightedPortRef.current.getBoundingClientRect();
         const event = new MouseEvent('mouseup', {
           clientX: rect.left + rect.width / 2,
           clientY: rect.top + rect.height / 2,
-          bubbles: true
+          bubbles: true,
+          // Mark as auto-dispatched to prevent recursion
+          isTrusted: false
         });
         highlightedPortRef.current.dispatchEvent(event);
       }

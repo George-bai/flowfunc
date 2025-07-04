@@ -36,6 +36,65 @@ class FlowfuncClass extends Component {
     this.updateConfig();
   }
 
+  createDisplayNodePorts = (ports, inputData, connections, context) => {
+    // Auto-expanding display node with compacting behavior
+    const connected_ports = new Set();
+    
+    if (connections.inputs) {
+      for (const portName in connections.inputs) {
+        if (portName.startsWith('input')) {
+          const portIndex = parseInt(portName.replace('input', ''), 10);
+          if (!isNaN(portIndex)) {
+            connected_ports.add(portIndex);
+          }
+        }
+      }
+    }
+    
+    // Sort connected ports to maintain order
+    const sorted_connected_ports = Array.from(connected_ports).sort((a, b) => a - b);
+    
+    // Store compacting information for later use in handleChange
+    if (sorted_connected_ports.length > 0) {
+      // Check if we need to compact connections (if there are gaps)
+      let needsCompacting = false;
+      for (let i = 0; i < sorted_connected_ports.length; i++) {
+        if (sorted_connected_ports[i] !== i) {
+          needsCompacting = true;
+          break;
+        }
+      }
+      
+      if (needsCompacting) {
+        // Store the compacting information for handleChange to process
+        this.pendingDisplayCompacting = {
+          originalPorts: sorted_connected_ports,
+          targetPorts: Array.from({length: sorted_connected_ports.length}, (_, i) => i)
+        };
+      }
+    }
+    
+    const arr = [];
+    
+    // Create sequential ports (compacted)
+    for (let i = 0; i < sorted_connected_ports.length; i++) {
+      arr.push(ports.object({ 
+        name: `input${i}`,
+        label: `Input ${i + 1} (connected)`,
+        acceptTypes: ['str', 'int', 'float', 'bool', 'object', 'list', 'dict']
+      }));
+    }
+    
+    // Add one empty port at the end
+    arr.push(ports.object({ 
+      name: `input${sorted_connected_ports.length}`, 
+      label: `Input ${sorted_connected_ports.length + 1}`,
+      acceptTypes: ['str', 'int', 'float', 'bool', 'object', 'list', 'dict']
+    }));
+    
+    return arr;
+  }
+
   updateConfig = () => {
     // Function to convert the python based config data to a FlumeConfig object
     const config = this.props.config;
@@ -84,12 +143,23 @@ class FlowfuncClass extends Component {
         else if (R.hasIn("path", inputs)) {
           try{
             node_obj.inputs = ports => (inputData, connections, context) => {
-              var func = window.dash_clientside.flowfunc[inputs.path];
-              return func(ports, inputData, connections, context)
+              // Check if it's the display node
+              if (inputs.path === "utils.toolnodes.display") {
+                // Embedded display node dynamic port logic
+                return this.createDisplayNodePorts(ports, inputData, connections, context);
+              }
+              
+              // For other dynamic functions, try to find them in window
+              var func = window.dash_clientside?.flowfunc?.[inputs.path];
+              if (!func) {
+                return [];
+              }
+              
+              return func(ports, inputData, connections, context);
             }
           }
           catch (e){
-            console.log("Error in evaluating function from path", e);
+            // Handle errors silently
           }
         }
         else {
@@ -124,10 +194,77 @@ class FlowfuncClass extends Component {
   }
 
   handleChange = () => {
+    // Get current nodes before processing
+    let currentNodes = this.nodeEditor.current.getNodes();
+    
+    // Handle display node compacting if needed
+    if (this.pendingDisplayCompacting) {
+      const { originalPorts, targetPorts } = this.pendingDisplayCompacting;
+      
+      // Find all display nodes that need compacting
+      for (const [nodeId, node] of Object.entries(currentNodes)) {
+        if (node.type === "utils.toolnodes.display") {
+          // Create mapping from old port names to new port names
+          const portMapping = {};
+          for (let i = 0; i < originalPorts.length; i++) {
+            portMapping[`input${originalPorts[i]}`] = `input${targetPorts[i]}`;
+          }
+          
+          // Update connections for this display node
+          if (node.connections && node.connections.inputs) {
+            const newInputs = {};
+            for (const [portName, connections] of Object.entries(node.connections.inputs)) {
+              if (portMapping[portName]) {
+                // Move connection to new port
+                newInputs[portMapping[portName]] = connections;
+              } else if (!portName.startsWith('input')) {
+                // Keep non-input ports as is
+                newInputs[portName] = connections;
+              }
+              // Note: old input connections that aren't remapped are automatically removed
+            }
+            node.connections.inputs = newInputs;
+          }
+          
+          // Also need to update all outgoing connections TO this display node
+          for (const [otherNodeId, otherNode] of Object.entries(currentNodes)) {
+            if (otherNode.connections && otherNode.connections.outputs) {
+              for (const [outputPort, outputConnections] of Object.entries(otherNode.connections.outputs)) {
+                if (Array.isArray(outputConnections)) {
+                  // Filter and update connections - remove old ones, update existing ones
+                  const newConnections = [];
+                  for (const connection of outputConnections) {
+                    if (connection.nodeId === nodeId) {
+                      if (portMapping[connection.portName]) {
+                        // Update the connection to new port
+                        const newConnection = { ...connection, portName: portMapping[connection.portName] };
+                        newConnections.push(newConnection);
+                      }
+                      // Note: connections to unmapped ports (old ports) are not added = removed
+                    } else {
+                      // Keep connections to other nodes
+                      newConnections.push(connection);
+                    }
+                  }
+                  otherNode.connections.outputs[outputPort] = newConnections;
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      // Clear the pending compacting
+      this.pendingDisplayCompacting = null;
+      
+      // Schedule a re-render after the current update cycle
+      this.needsForceRerender = true;
+    }
+    
     // Dash function which will raise the nodes properties
     this.props.setProps({
       editor_status: "client",
-      nodes: this.nodeEditor.current.getNodes(),
+      nodes: currentNodes,
       comments: this.nodeEditor.current.getComments(),
     })
     // console.log(this.props.comments);
@@ -150,6 +287,17 @@ class FlowfuncClass extends Component {
     if (this.props.fit_to_view !== prevProps.fit_to_view && this.props.fit_to_view) {
       this.performFitToView();
     }
+    
+    // Handle forced re-render after compacting
+    if (this.needsForceRerender) {
+      this.needsForceRerender = false;
+      if (this.nodeEditor.current && this.nodeEditor.current.setNodes) {
+        this.nodeEditor.current.setNodes(this.props.nodes);
+      }
+      // Generate new key to force React re-render
+      this.ukey = (Math.random() + 1).toString(36).substring(7);
+    }
+    
     this.setNodesStatus();
   }
 

@@ -1,3 +1,4 @@
+import React from 'react'
 import { Colors, Controls } from 'flume'
 
 const generateControl = (itype) => {
@@ -38,7 +39,7 @@ const objectControl = (props) => {
 
 const standardControls = {
     number: Controls.number,
-    int: Controls.number,
+    int: Controls.number,  // Back to standard number control
     float: Controls.number,
     text: Controls.text,
     str: Controls.text,
