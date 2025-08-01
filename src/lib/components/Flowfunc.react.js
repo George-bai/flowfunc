@@ -32,7 +32,6 @@ class FlowfuncClass extends Component {
     this.container = this.props.containerRef || React.createRef();
     this.ukey = (new Date()).toISOString();
     this.localSelectedNodes = new Set();
-    this.fitToViewScale = this.props.initial_scale || 1;
     this.updateConfig();
   }
 
@@ -284,9 +283,7 @@ class FlowfuncClass extends Component {
       // console.log("Pushing new nodes", this.props.nodes)
       this.ukey = (Math.random() + 1).toString(36).substring(7);
     }
-    if (this.props.fit_to_view !== prevProps.fit_to_view && this.props.fit_to_view) {
-      this.performFitToView();
-    }
+
     
     // Handle forced re-render after compacting
     if (this.needsForceRerender) {
@@ -324,72 +321,7 @@ class FlowfuncClass extends Component {
     }
   }
 
-  performFitToView = () => {
-    if (!this.props.nodes || Object.keys(this.props.nodes).length === 0) {
-      return;
-    }
-    // Calculate bounds of all nodes including their dimensions
-    let minX = Infinity;
-    let minY = Infinity;
-    let maxX = -Infinity;
-    let maxY = -Infinity;
-    
-    Object.values(this.props.nodes).forEach(node => {
-      // Include the node's full dimensions in boundary calculations
-      minX = Math.min(minX, node.x);
-      minY = Math.min(minY, node.y);
-      maxX = Math.max(maxX, node.x);
-      maxY = Math.max(maxY, node.y);
-    });
-    
-    // Add padding
-    const padding = 150;
-    minX -= padding;
-    minY -= padding;
-    maxX += padding;
-    maxY += padding;
-    
-    // Get viewport dimensions
-    const viewportWidth = this.container.current.clientWidth;
-    const viewportHeight = this.container.current.clientHeight;
-    
-    // Calculate content size and scale to fit
-    const contentWidth = maxX - minX;
-    const contentHeight = maxY - minY;
-    const scaleX = viewportWidth / contentWidth;
-    const scaleY = viewportHeight / contentHeight;
-    
-    // Use the smaller scale to ensure everything fits
-    // Don't cap at 1 - we want to zoom out if needed
-    const scale = Math.min(scaleX, scaleY);
-    const finalScale = Math.max(scale, 0.1); // Minimum scale of 0.1
-    
-    // Calculate center position of the content
-    const centerX = (maxX + minX) / 2;
-    const centerY = (maxY + minY) / 2;
-    
-    // Calculate translation values to center the content in the viewport
-    const translateX = (viewportWidth / 2) - (centerX * finalScale);
-    const translateY = (viewportHeight / 2) - (centerY * finalScale);
-    
-    // Apply both scale and translation to the NodeEditor
-    if (this.nodeEditor.current && this.nodeEditor.current.setTransform) {
-      this.nodeEditor.current.setTransform({
-        x: translateX,
-        y: translateY,
-        scale: finalScale
-      });
-    }
-    
-    // Store the scale for future renders
-    this.fitToViewScale = finalScale;
-    
-    // Generate a new key to force proper re-render
-    this.ukey = (Math.random() + 1).toString(36).substring(7);
-    
-    // Trigger re-render to apply changes
-    this.forceUpdate();
-  }
+
 
   addEventListners = () => {
     const comp = this;
@@ -441,7 +373,7 @@ class FlowfuncClass extends Component {
             nodes={this.props.nodes}
             defaultNodes={this.props.default_nodes}
             context={this.props.context}
-            initialScale={this.fitToViewScale}
+            initialScale={this.props.initial_scale}
             disableZoom={this.props.disable_zoom}
             disablePan={this.props.disable_pan}
             spaceToPan={this.props.space_to_pan}
@@ -517,33 +449,7 @@ class FlowfuncClass extends Component {
               <path d="M6 12.5C6 11.6716 6.67157 11 7.5 11C8.32843 11 9 11.6716 9 12.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
             </svg>
           </button>
-          
-          {/* Fit to View button */}
-          <button
-            onClick={this.performFitToView}
-            style={{
-              padding: '6px',
-              backgroundColor: '#2a2a2a',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '3px',
-              cursor: 'pointer',
-              width: '32px',
-              height: '32px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
-            title="Fit to View"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M4 8V4H8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M4 16V20H8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M16 4H20V8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M16 20H20V16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <rect x="8" y="8" width="8" height="8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
-          </button>
+
         </div>
       </React.Fragment>
     );
@@ -629,11 +535,6 @@ FlowfuncClass.propTypes = {
    * Disable zoom option
    */
   space_to_pan: PropTypes.bool,
-
-  /**
-   * Trigger fit to view when this prop changes to true
-   */
-  fit_to_view: PropTypes.bool,
 
   /**
    * The available port types and node types
