@@ -74,6 +74,7 @@ extra_ports = [
 fconfig = config.Config.from_function_list(flist, extra_ports=extra_ports)
 # Override inputs of select_columns to use clientside dynamic inputs
 _sel_type = ".".join([select_columns.__module__, select_columns.__name__])
+print(_sel_type)
 fconfig.get_node(_sel_type).inputs = PortFunction(path="utils.toolnodes.select_columns_inputs")
 runner = jobrunner.JobRunner(fconfig)
 

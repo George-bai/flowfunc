@@ -136,7 +136,7 @@ class FlowfuncClass extends Component {
         if (R.hasIn("source", inputs)) {
           var func = new Function(inputs.source);
           node_obj.inputs = ports => (inputData, connections, context) => {
-            return func(ports, inputData, connections, context)
+            return func(ports, inputData, connections, context, Controls)
           }
         }
         else if (R.hasIn("path", inputs)) {
@@ -154,7 +154,7 @@ class FlowfuncClass extends Component {
                 return [];
               }
               
-              return func(ports, inputData, connections, context);
+              return func(ports, inputData, connections, context, Controls);
             }
           }
           catch (e){
