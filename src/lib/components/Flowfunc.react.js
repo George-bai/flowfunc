@@ -376,6 +376,7 @@ class FlowfuncClass extends Component {
             initialScale={this.props.initial_scale}
             disableZoom={this.props.disable_zoom}
             disablePan={this.props.disable_pan}
+            disableFocus={this.props.disable_focus}
             spaceToPan={this.props.space_to_pan}
             onChange={this.handleChange}
             onCommentsChange={this.handleChange}
@@ -535,6 +536,11 @@ FlowfuncClass.propTypes = {
    * Disable zoom option
    */
   space_to_pan: PropTypes.bool,
+
+  /**
+   * Disable automatic focusing behavior in the editor (Flume 1.1.0)
+   */
+  disable_focus: PropTypes.bool,
 
   /**
    * The available port types and node types

@@ -55,7 +55,7 @@ def default_meta_method(
         method,
         kwargs=input_args,  # this is later updated by the custom job class
         meta={
-            "node_connections": node.connections.dict(),
+            "node_connections": node.connections.model_dump(),
             "result_keys": [
                 x.name for x in job_runner.flume_config.get_node(node.type).outputs
             ],
