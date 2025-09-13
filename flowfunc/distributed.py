@@ -47,7 +47,11 @@ class NodeJob(Job):
                     continue
                 dependent_job = NodeJob.fetch(djid, connection=self.connection)
                 value = dependent_job.result_mapped[pname]
-                self.kwargs.update({key: value})
+                # If we enqueued the run_node_wrapper, arguments are nested under 'literal_kwargs'
+                if isinstance(self.kwargs, dict) and 'literal_kwargs' in self.kwargs and isinstance(self.kwargs['literal_kwargs'], dict):
+                    self.kwargs['literal_kwargs'][key] = value
+                else:
+                    self.kwargs.update({key: value})
             except Exception:
                 pass
 
@@ -61,51 +65,11 @@ class NodeJob(Job):
     def perform(self):
         """Overriding the perform method of the parent class.
 
-        Adds cache short-circuiting using metadata prepared at enqueue time.
+        Only resolves upstream kwargs; caching is handled exclusively in run_node_wrapper.
         """
         # Always ensure kwargs reflect upstream job results
         self.update_kwargs()
-        
-
-        meta = self.get_meta() or {}
-        cache_enabled = bool(meta.get("cache_enabled"))
-        cache_session = meta.get("cache_session")
-        cache_signature = meta.get("cache_signature")
-        node_id = meta.get("node_id")
-
-        # If caching is enabled and signature present, try to serve from cache
-        if cache_enabled and cache_session and cache_signature and node_id:
-            try:
-                cache = CacheManager(redis_client=self.connection, session_id=str(cache_session), ttl_seconds=meta.get("cache_ttl_seconds"))
-                cached = cache.get_if_fresh(node_id, cache_signature)
-            except Exception:
-                cached = None
-            if cached is not None:
-                # Short-circuit execution
-                try:
-                    self.meta = {**meta, **{"cache_hit": True}}
-                    self.save_meta()
-                except Exception:
-                    pass
-                return cached
-
-        # Normal execution
-        result = super().perform()
-
-        # Store to cache on success
-        if cache_enabled and cache_session and cache_signature and node_id:
-            try:
-                cache = CacheManager(redis_client=self.connection, session_id=str(cache_session), ttl_seconds=meta.get("cache_ttl_seconds"))
-                code_hash_val = meta.get("code_hash") or ""
-                cache.put(node_id, cache_signature, result, code_hash_val)
-                try:
-                    self.meta = {**meta, **{"cache_hit": False}}
-                    self.save_meta()
-                except Exception:
-                    pass
-            except Exception:
-                pass
-        return result
+        return super().perform()
 
     @property
     def result_mapped(self):

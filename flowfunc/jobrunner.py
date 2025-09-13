@@ -73,6 +73,14 @@ def default_meta_method(
     except Exception:
         # Fallback: direct method (won't resolve deps)
         _ff_run_wrapper = method
+    # Combine depends_on from upstream dependents and any user-provided depends in job_kwargs
+    user_depends = job_kwargs.pop("depends_on", None)
+    depends_param = [dependent.job_id for dependent in dependents]
+    if user_depends:
+        if isinstance(user_depends, (list, tuple)):
+            depends_param.extend(list(user_depends))
+        else:
+            depends_param.append(user_depends)
     return job_queue.enqueue(
         _ff_run_wrapper,
         kwargs={
@@ -82,7 +90,7 @@ def default_meta_method(
         meta={
             "node_connections": node.connections.model_dump(),
             "result_keys": [
-                x.name for x in job_runner.flume_config.get_node(node.type).outputs
+                x.name for x in (job_runner.flume_config.get_node(node.type).outputs or [])
             ],
             "node_id": node.id,
             "node_type": node.type,
@@ -94,7 +102,7 @@ def default_meta_method(
             "code_hash": code_hash_val,
             **job_runner.meta_data,
         },
-        depends_on=[dependent.job_id for dependent in dependents],
+        depends_on=depends_param,
         **job_kwargs,
     )
 
@@ -246,24 +254,28 @@ class JobRunner:
         if not out_dict:
             return
         mapped_dict = deepcopy(out_dict)
+        # Reset signatures/code hashes for a fresh run (prevents leakage across runs)
+        self._signatures = {}
+        self._code_hashes = {}
         if selected_node_ids:
             dependent_node_ids = self.dependent_nodes(selected_node_ids, mapped_dict)
             mapped_dict = {nodeid: mapped_dict[nodeid] for nodeid in dependent_node_ids}
+
+        # Dispatch by method for both full and filtered runs
+        if self.method == "sync":
+            return asyncio.run(self.run_async(mapped_dict))
+        elif self.method == "async":
+            return self.run_async(mapped_dict)
+        elif self.method == "distributed" and self.same_worker:
+            return asyncio.run(self.run_distributed_same_worker(out_dict))
+        elif self.method == "async_distributed" and self.same_worker:
+            return self.run_distributed_same_worker(out_dict)
+        elif self.method == "distributed":
+            return asyncio.run(self.run_distributed(mapped_dict))
+        elif self.method == "async_distributed":
+            return self.run_distributed(mapped_dict)
         else:
-            if self.method == "sync":
-                return asyncio.run(self.run_async(mapped_dict))
-            elif self.method == "async":
-                return self.run_async(mapped_dict)
-            elif self.method == "distributed" and self.same_worker:
-                return asyncio.run(self.run_distributed_same_worker(out_dict))
-            elif self.method == "async_distributed" and self.same_worker:
-                return self.run_distributed_same_worker(out_dict)
-            elif self.method == "distributed":
-                return asyncio.run(self.run_distributed(mapped_dict))
-            elif self.method == "async_distributed":
-                return self.run_distributed(mapped_dict)
-            else:
-                raise ValueError(
+            raise ValueError(
                 "The provided method is not identified."
                 " It should be one of sync, async or distributed"
             )
@@ -382,7 +394,7 @@ class JobRunner:
         out_node.result = None
         out_node.result_mapped = {}
         input_args = {}
-        for key, values in out_node.inputData.items():
+        for key, values in (out_node.inputData or {}).items():
             if not values:
                 continue
             # If there are more than one control in this port return the dict
@@ -396,7 +408,11 @@ class JobRunner:
             if variable_value is None:
                 continue  # This is null coming from react for unset controls
             input_args[key] = variable_value
-        for key, connections in out_node.connections.inputs.items():
+        if out_node.connections and out_node.connections.inputs:
+            inputs_map = out_node.connections.inputs or {}
+        else:
+            inputs_map = {}
+        for key, connections in inputs_map.items():
             # Now only one connection is supported by flume.
             # Hence using the first one
             dependent_nodeid = connections[0].nodeId
@@ -447,9 +463,8 @@ class JobRunner:
             except Exception as e:
                 out_node.error = e
                 out_node.status = "failed"
-        out_node.run_event.set()
-
         if hasattr(out_node, "error") and out_node.error:
+            out_node.run_event.set()
             return
         out_node.result = method_output
 
@@ -470,6 +485,7 @@ class JobRunner:
                 self._signatures[nodeid] = signature
             except Exception:
                 pass
+        out_node.run_event.set()
 
     async def run_distributed(
         self, mapped_dict: Dict[str, OutNode]
@@ -546,11 +562,6 @@ class JobRunner:
         else:
             job_kwargs = {}
         job_queue = job_kwargs.pop("queue", self.queue)
-        depends_on = job_kwargs.pop("depends_on", [])
-        try:
-            dependents += depends_on
-        except TypeError:
-            dependents.append(depends_on)
 
         meta_method = self.meta_map.get(method, default_meta_method)
 
