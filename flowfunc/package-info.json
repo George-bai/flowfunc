@@ -20,7 +20,7 @@
     "url": "https://github.com/idling-mind/flowfunc/issues"
   },
   "dependencies": {
-    "flume": "^1.0.0",
+    "flume": "^1.1.0",
     "ramda": "^0.28.0"
   },
   "devDependencies": {
