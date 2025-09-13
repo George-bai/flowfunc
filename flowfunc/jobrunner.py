@@ -5,6 +5,13 @@ from copy import copy, deepcopy
 from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import validate_call, ConfigDict
+from .cache import (
+    CacheManager,
+    make_redis_client,
+    stable_json_dumps,
+    code_hash,
+    sha256_hex_bytes,
+)
 
 from .config import Config
 from .exceptions import ErrorInDependentNode, QueueError
@@ -51,15 +58,40 @@ def default_meta_method(
     job: NodeJob
         An instance of the rq job
     """
+    # Provide cache-related metadata for worker-side short-circuiting
+    cache_enabled = bool(getattr(job_runner, "cache_enabled", False))
+    cache_obj: CacheManager | None = getattr(job_runner, "cache", None)
+    session_id = cache_obj.session_id if cache_obj else None
+    ttl_seconds = cache_obj.ttl if cache_obj else None
+    # precomputed signature and code hash if available
+    cache_signature = job_runner._signatures.get(node.id)
+    code_hash_val = job_runner._code_hashes.get(node.id, code_hash(method))
+
+    # Enqueue wrapper that resolves dependencies + cache in worker context
+    try:
+        from .distributed import run_node_wrapper as _ff_run_wrapper  # local import to avoid circulars
+    except Exception:
+        # Fallback: direct method (won't resolve deps)
+        _ff_run_wrapper = method
     return job_queue.enqueue(
-        method,
-        kwargs=input_args,  # this is later updated by the custom job class
+        _ff_run_wrapper,
+        kwargs={
+            "func": method,
+            "literal_kwargs": input_args,
+        },
         meta={
             "node_connections": node.connections.model_dump(),
             "result_keys": [
                 x.name for x in job_runner.flume_config.get_node(node.type).outputs
             ],
             "node_id": node.id,
+            "node_type": node.type,
+            # cache control/meta
+            "cache_enabled": cache_enabled,
+            "cache_session": session_id,
+            "cache_ttl_seconds": ttl_seconds,
+            "cache_signature": cache_signature,
+            "code_hash": code_hash_val,
             **job_runner.meta_data,
         },
         depends_on=[dependent.job_id for dependent in dependents],
@@ -128,6 +160,11 @@ class JobRunner:
         default_queue: Optional[Any] = None,
         meta_map: Optional[Dict[Callable, Callable]] = None,
         meta_data: Optional[Dict[str, Any]] = None,
+        # Caching options
+        cache_enabled: bool = False,
+        redis_url: Optional[str] = None,
+        session_id: Optional[str] = None,
+        cache_ttl_seconds: Optional[int] = 1800,
     ):
         self.flume_config = flume_config
         self.method = method
@@ -139,6 +176,47 @@ class JobRunner:
                 "If the method is distributed, the `default_queue` argument cannot be empty."
             )
         self.same_worker = same_worker
+        # cache
+        self.cache_enabled = cache_enabled
+        self.cache: Optional[CacheManager] = None
+        # map for signatures and function code hashes
+        self._signatures: Dict[str, str] = {}
+        self._code_hashes: Dict[str, str] = {}
+        if cache_enabled:
+            client = make_redis_client(redis_url)
+            sid = session_id or "default"
+            self.cache = CacheManager(client, sid, ttl_seconds=cache_ttl_seconds)
+            if not (self.cache and self.cache.ping()):
+                self.cache_enabled = False
+        # store computed signatures per node id (for downstream)
+        # (reinitialized at run boundaries as appropriate)
+
+    def _build_signature(self, nodeid: str, out_node: OutNode, input_args: dict, mapped_dict: dict, method: Callable) -> tuple[str, str]:
+        """Compute a deterministic signature for a node based on controls, upstream signatures and function code.
+
+        Returns (signature_hex, func_code_hash).
+        """
+        # Gather upstream signatures if available
+        upstream_sigs: List[str] = []
+        if out_node.connections and out_node.connections.inputs:
+            for _key, connections in out_node.connections.inputs.items():
+                if not connections:
+                    continue
+                dep_id = connections[0].nodeId
+                dep_sig = self._signatures.get(dep_id, "")
+                upstream_sigs.append(dep_sig)
+        func_hash = code_hash(method)
+        # Only include literal controls (exclude connected inputs which may be large objects)
+        connected_keys = set((out_node.connections.inputs or {}).keys() if out_node.connections else [])
+        literal_controls = {k: v for k, v in (input_args or {}).items() if k not in connected_keys}
+        material = {
+            "controls": literal_controls,
+            "upstream": sorted(upstream_sigs),
+            "func": func_hash,
+            "node_type": out_node.type,
+        }
+        sig = sha256_hex_bytes(stable_json_dumps(material).encode())
+        return sig, func_hash
 
     @validate_call
     def run(
@@ -169,31 +247,23 @@ class JobRunner:
             return
         mapped_dict = deepcopy(out_dict)
         if selected_node_ids:
-            logger.info(
-                f"Running {len(selected_node_ids)} node(s) out of {len(mapped_dict)}"
-                f" in {self.method} mode."
-            )
             dependent_node_ids = self.dependent_nodes(selected_node_ids, mapped_dict)
-            logger.info(
-                f"Found {len(dependent_node_ids)} nodes dependent on selected nodes."
-            )
             mapped_dict = {nodeid: mapped_dict[nodeid] for nodeid in dependent_node_ids}
         else:
-            logger.info(f"Running {len(mapped_dict)} nodes in {self.method} mode.")
-        if self.method == "sync":
-            return asyncio.run(self.run_async(mapped_dict))
-        elif self.method == "async":
-            return self.run_async(mapped_dict)
-        elif self.method == "distributed" and self.same_worker:
-            return asyncio.run(self.run_distributed_same_worker(out_dict))
-        elif self.method == "async_distributed" and self.same_worker:
-            return self.run_distributed_same_worker(out_dict)
-        elif self.method == "distributed":
-            return asyncio.run(self.run_distributed(mapped_dict))
-        elif self.method == "async_distributed":
-            return self.run_distributed(mapped_dict)
-        else:
-            raise ValueError(
+            if self.method == "sync":
+                return asyncio.run(self.run_async(mapped_dict))
+            elif self.method == "async":
+                return self.run_async(mapped_dict)
+            elif self.method == "distributed" and self.same_worker:
+                return asyncio.run(self.run_distributed_same_worker(out_dict))
+            elif self.method == "async_distributed" and self.same_worker:
+                return self.run_distributed_same_worker(out_dict)
+            elif self.method == "distributed":
+                return asyncio.run(self.run_distributed(mapped_dict))
+            elif self.method == "async_distributed":
+                return self.run_distributed(mapped_dict)
+            else:
+                raise ValueError(
                 "The provided method is not identified."
                 " It should be one of sync, async or distributed"
             )
@@ -213,6 +283,80 @@ class JobRunner:
         if len(new_node_ids) > len(selected_node_ids):
             return self.dependent_nodes(new_node_ids, mapped_dict)
         return new_node_ids
+
+    def _toposort_nodes(self, mapped_dict: Dict[str, OutNode]) -> List[str]:
+        """Topologically sort nodes so that dependencies come first."""
+        indegree: Dict[str, int] = {nid: 0 for nid in mapped_dict}
+        children: Dict[str, List[str]] = {nid: [] for nid in mapped_dict}
+        for nid, node in mapped_dict.items():
+            if node.connections and node.connections.inputs:
+                for conns in node.connections.inputs.values():
+                    if not conns:
+                        continue
+                    dep = conns[0].nodeId
+                    if dep in indegree:
+                        indegree[nid] += 1
+                        children[dep].append(nid)
+        # Kahn's algorithm
+        queue = [nid for nid, deg in indegree.items() if deg == 0]
+        order: List[str] = []
+        while queue:
+            cur = queue.pop(0)
+            order.append(cur)
+            for child in children.get(cur, []):
+                indegree[child] -= 1
+                if indegree[child] == 0:
+                    queue.append(child)
+        # Fallback: if cycle/leftovers, append remaining nodes in arbitrary order
+        if len(order) != len(mapped_dict):
+            for nid in mapped_dict:
+                if nid not in order:
+                    order.append(nid)
+        return order
+
+    def _precompute_signatures(self, mapped_dict: Dict[str, OutNode]):
+        """Compute deterministic signatures for all nodes in topological order.
+
+        Populates self._signatures and self._code_hashes for use in distributed mode.
+        """
+        self._signatures = {}
+        self._code_hashes = {}
+        order = self._toposort_nodes(mapped_dict)
+        for nodeid in order:
+            out_node = mapped_dict[nodeid]
+            method = self.flume_config.get_node(out_node.type).method
+            # gather literal controls
+            input_args: Dict[str, Any] = {}
+            for key, values in (out_node.inputData or {}).items():
+                if not values:
+                    continue
+                if len(values) > 1:
+                    variable_value = values
+                else:
+                    variable_value = next(iter(values.values()))
+                if variable_value is None:
+                    continue
+                input_args[key] = variable_value
+            connected_keys = set((out_node.connections.inputs or {}).keys() if out_node.connections else [])
+            literal_controls = {k: v for k, v in (input_args or {}).items() if k not in connected_keys}
+            # upstream signatures (from already processed nodes)
+            upstream_sigs: List[str] = []
+            if out_node.connections and out_node.connections.inputs:
+                for conns in out_node.connections.inputs.values():
+                    if not conns:
+                        continue
+                    dep_id = conns[0].nodeId
+                    upstream_sigs.append(self._signatures.get(dep_id, ""))
+            func_hash = code_hash(method)
+            material = {
+                "controls": literal_controls,
+                "upstream": sorted(upstream_sigs),
+                "func": func_hash,
+                "node_type": out_node.type,
+            }
+            sig = sha256_hex_bytes(stable_json_dumps(material).encode())
+            self._signatures[nodeid] = sig
+            self._code_hashes[nodeid] = func_hash
 
     async def run_async(self, mapped_dict) -> Dict[str, OutNode]:
         """Run the flow asynchronously"""
@@ -234,7 +378,7 @@ class JobRunner:
         config_node = self.flume_config.get_node(out_node.type)
         # method = validate_arguments(config_node.method)
         method = config_node.method
-        logger.info(f"Evaluating node with id {nodeid} and function {method}")
+        
         out_node.result = None
         out_node.result_mapped = {}
         input_args = {}
@@ -258,7 +402,6 @@ class JobRunner:
             dependent_nodeid = connections[0].nodeId
             dependent_node = mapped_dict[dependent_nodeid]
             out_node.status = "deferred"
-            logger.info(f"Node {nodeid} waiting for Node {dependent_nodeid} to finish.")
             await dependent_node.run_event.wait()
             if hasattr(dependent_node, "error") and dependent_node.error:
                 out_node.error = ErrorInDependentNode(
@@ -268,6 +411,26 @@ class JobRunner:
                 out_node.run_event.set()
                 return
             input_args[key] = dependent_node.result_mapped[connections[0].portName]
+        # At this point inputs are fully resolved; try cache before executing
+        if self.cache and self.cache_enabled:
+            signature, func_hash = self._build_signature(nodeid, out_node, input_args, mapped_dict, method)
+            cached = self.cache.get_if_fresh(nodeid, signature)
+            if cached is not None:
+                out_node.result = cached
+                # map to outputs as usual
+                method_output = out_node.result
+                if not isinstance(method_output, tuple):
+                    method_output = (method_output,)
+                output_args = [
+                    x.name for x in (self.flume_config.get_node(out_node.type).outputs or [])
+                ]
+                out_node.result_mapped = {x: y for x, y in zip(output_args, method_output)}
+                out_node.status = "finished"
+                self._signatures[nodeid] = signature
+                out_node.run_event.set()
+                return
+            else:
+                pass
         if inspect.iscoroutinefunction(method):
             try:
                 method_output = await validate_call(
@@ -282,7 +445,6 @@ class JobRunner:
                     config=ConfigDict(arbitrary_types_allowed=True)
                 )(method)(**input_args)
             except Exception as e:
-                logger.error(f"Execution of Node {nodeid} has failed.")
                 out_node.error = e
                 out_node.status = "failed"
         out_node.run_event.set()
@@ -300,11 +462,26 @@ class JobRunner:
         ]
         out_node.result_mapped = {x: y for x, y in zip(output_args, method_output)}
         out_node.status = "finished"
+        # Write to cache post-compute
+        if self.cache and self.cache_enabled:
+            signature, func_hash = self._build_signature(nodeid, out_node, input_args, mapped_dict, method)
+            try:
+                blob_dig = self.cache.put(nodeid, signature, out_node.result, func_hash)
+                self._signatures[nodeid] = signature
+            except Exception:
+                pass
 
     async def run_distributed(
         self, mapped_dict: Dict[str, OutNode]
     ) -> Dict[str, OutNode]:
         """Run the flow using python rq"""
+        # Precompute signatures for all nodes in a stable order so the worker can short-circuit.
+        if self.cache_enabled:
+            try:
+                self._precompute_signatures(mapped_dict)
+            except Exception:
+                # Fall back silently if precompute fails; worker will still run jobs
+                pass
         nodes_evaluted = []
         for nodeid, node in mapped_dict.items():
             # Storing the lock in the node itself so that dependent nodes
@@ -360,9 +537,6 @@ class JobRunner:
             # Hence using the first one
             dependent_nodeid = connections[0].nodeId
             dependent_node = mapped_dict[dependent_nodeid]
-            logger.info(
-                f"Node {nodeid} waiting for Node {dependent_nodeid} to be submitted."
-            )
             await dependent_node.run_event.wait()
             connections[0].job_id = dependent_node.job_id
             dependents.append(dependent_node)
@@ -389,7 +563,6 @@ class JobRunner:
             dependents=dependents,
             job_kwargs=job_kwargs,
         )
-        logger.info(f"Node {nodeid} has been submitted.")
         node.job_id = node.job.id
         # Setting the current job's output connection job id
         # This may not be required

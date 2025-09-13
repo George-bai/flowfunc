@@ -1,9 +1,14 @@
 import math
+import asyncio
 from typing import Annotated, Literal, List, Optional
 import dash
 from dash import Input, Output, State, html
-from flowfunc import Flowfunc, config, jobrunner
+from flowfunc import config, jobrunner
+from flowfunc.Flowfunc import Flowfunc
 from flowfunc.models import PortFunction, Port, Control, ControlType
+import uuid
+import numpy as np
+import logging
 from enum import Enum
 import pandas as pd
 
@@ -36,9 +41,36 @@ def trig_function(
 
 
 # Example DataFrame source for testing
-def make_df() -> pd.DataFrame:
-    """Create a sample DataFrame"""
-    return pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6], "c": [7, 8, 9]})
+def make_df(
+    rows: Annotated[int, {"label": "Rows"}] = 1_000_000,
+    cols: Annotated[int, {"label": "Columns"}] = 10,
+    dtype: Annotated[Literal["float32", "float64"], {"label": "DType"}] = "float32",
+) -> pd.DataFrame:
+    """Create a large DataFrame for performance testing.
+
+    Defaults generate ~40 MB (1e6 x 10 x 4 bytes) plus pandas overhead. Increase parameters to stress test (e.g., rows=5_000_000, cols=10 for ~200 MB with float32).
+    """
+    dt = np.float32 if dtype == "float32" else np.float64
+    # seed for deterministic results
+    rng = np.random.default_rng(42)
+    data = rng.standard_normal(size=(rows, cols), dtype=dt)
+    df = pd.DataFrame(data, columns=[f"c{i}" for i in range(cols)])
+    return df
+
+
+def heavy_groupby_stats(
+    df: pd.DataFrame,
+    groups: Annotated[int, {"label": "Groups"}] = 1000,
+) -> pd.DataFrame:
+    """Expensive groupby aggregation across all columns.
+
+    Groups rows by index % groups and computes mean/std/sum, returning a wide aggregated frame.
+    """
+    key = (df.index % groups)
+    agg = df.groupby(key).agg(["mean", "std", "sum"])  # multi-index columns
+    # flatten multi-index columns for clarity
+    agg.columns = ["_".join([str(a) for a in tup]) for tup in agg.columns.to_flat_index()]
+    return agg
 
 
 def select_columns(df: pd.DataFrame, columns: Optional[List[str]] = None) -> pd.DataFrame:
@@ -57,7 +89,16 @@ flist = [
     trig_function,
     make_df,
     select_columns,
+    heavy_groupby_stats,
 ]
+# Configure logging so backend cache messages appear in console
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    force=True,
+)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
 app = dash.Dash(__name__, assets_folder="examples/assets")
 
 # Ensure 'str' port type exists so the fallback text input renders correctly
@@ -75,11 +116,46 @@ fconfig = config.Config.from_function_list(flist, extra_ports=extra_ports)
 # Override inputs of select_columns to use clientside dynamic inputs
 _sel_type = ".".join([select_columns.__module__, select_columns.__name__])
 fconfig.get_node(_sel_type).inputs = PortFunction(path="utils.toolnodes.select_columns_inputs")
-runner = jobrunner.JobRunner(fconfig)
+# Enable caching (session-scoped) using Redis
+SESSION_ID = str(uuid.uuid4())
+# Two runners to compare modes against the same cache/session
+runner_sync = jobrunner.JobRunner(
+    fconfig,
+    method="sync",
+    cache_enabled=True,
+    redis_url="redis://localhost:6379/0",
+    session_id=SESSION_ID,
+    cache_ttl_seconds=1800,
+)
+runner_async = jobrunner.JobRunner(
+    fconfig,
+    method="async",
+    cache_enabled=True,
+    redis_url="redis://localhost:6379/0",
+    session_id=SESSION_ID,
+    cache_ttl_seconds=1800,
+)
 
 app.layout = html.Div(
     [
-        html.Button(id="btn_run", children=["Run"]),
+        html.Div([
+            html.Button(id="btn_run", children=["Run"], style={"marginRight": "8px"}),
+            html.Span("Mode:", style={"marginRight": "6px"}),
+            html.Span(id="mode_label", children="sync", style={"fontFamily": "monospace", "marginRight": "8px"}),
+            html.Div(
+                id="mode_container",
+                children=dash.dcc.RadioItems(
+                    id="mode",
+                    options=[
+                        {"label": "sync", "value": "sync"},
+                        {"label": "async", "value": "async"},
+                    ],
+                    value="sync",
+                    inline=True,
+                ),
+                style={"display": "inline-block"},
+            ),
+        ]),
         html.Div(
             Flowfunc(
                 id="nodeeditor",
@@ -103,15 +179,28 @@ app.layout = html.Div(
     ],
     Input("btn_run", "n_clicks"),
     State("nodeeditor", "nodes"),
+    State("mode", "value"),
 )
-def run(nclicks, nodes):
+def run(nclicks, nodes, mode):
+    print(f"[CALLBACK] Run clicked n_clicks={nclicks}, mode={mode}, nodes={len(nodes) if nodes else 0}", flush=True)
     if not nodes:
+        print("[CALLBACK] No nodes provided from editor", flush=True)
         return [], {}, {}
-    output = runner.run(nodes)
+    if mode == "async":
+        print("[CALLBACK] Executing in ASYNC mode (cache enabled)", flush=True)
+        output = asyncio.run(runner_async.run(nodes))
+    else:
+        print("[CALLBACK] Executing in SYNC mode (cache enabled)", flush=True)
+        output = runner_sync.run(nodes)
+    print("[CALLBACK] Runner finished", flush=True)
     output_html = []
     nodes_status = {}
     context = {"nodes": {}}
     for node in output.values():
+        try:
+            print(f"[NODE] id={node.id} type={node.type} status={node.status} error={bool(node.error)}", flush=True)
+        except Exception:
+            pass
         output_html.append(html.Div(f"{node.type}: {node.result}"))
         if node.error:
             output_html.append(html.Div(f"{node.error}"))
@@ -152,4 +241,4 @@ def run(nclicks, nodes):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8050, use_reloader=True)
+    app.run(debug=True, port=8050, use_reloader=False)

@@ -137,12 +137,26 @@ def display(output1, output2="", output3="", output4="", output5=""):
     """Display outputs"""
     return html.Div([output1, output2, output3, output4, output5])
 
+def read_csv() -> pd.DataFrame:
+    """Read a csv file"""
+    try:
+        df = pd.read_csv("/mnt/c/Projects/analytic/data/processed/BTCUSDT_1m_2024_2024_5m_ohlcv.csv")
+    except FileNotFoundError:
+        df = pd.read_csv("C:/Projects/analytic/data/processed/BTCUSDT_1m_2024_2024_5m_ohlcv.csv")  
+    return df
+
 def read_dataframe(url: str, data_type: Literal["csv", "excel"], separator: str) -> pd.DataFrame:
     """Read a dataframe"""
+    print(url)
+    print(data_type)
+    print(separator)
     if data_type == "csv":
+        print("csv...")
         return pd.read_csv(url, sep=separator)
     elif data_type == "excel":
+        print("excel...")
         return pd.read_excel(url)
+    print("table...")
     return pd.read_table(url)
 
 def scatter_plot(df: pd.DataFrame, x: str, y: str) -> dcc.Graph:
@@ -178,6 +192,7 @@ all_functions = [
     convert_to_string,
     dataframe_to_datatable,
     convert_to_markdown,
+    read_csv,
     read_dataframe,
     display,
     scatter_plot,

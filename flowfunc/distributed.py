@@ -4,10 +4,12 @@ RQ Utils
 This module defines redis-queue related classess and functions.
 """
 from __future__ import annotations
-from rq.job import Job
+from rq.job import Job, get_current_job
 from rq.queue import Queue
 from .models import OutConnections
-from pydantic import validate_arguments
+from pydantic import validate_arguments, validate_call, ConfigDict
+from .cache import CacheManager
+import time
 
 
 class NodeJob(Job):
@@ -37,12 +39,17 @@ class NodeJob(Job):
             # Also, dependent job should be complete before this job starts peforming.
             # Also assuming that there is only one connection in one port
             # as flume allows only one at this time.
-            dependent_job = NodeJob.fetch(
-                node_connection[0].job_id, connection=self.connection
-            )
-            self.kwargs.update(
-                {key: dependent_job.result_mapped[node_connection[0].portName]}
-            )
+            try:
+                oc = node_connection[0]
+                djid = getattr(oc, "job_id", None)
+                pname = getattr(oc, "portName", None)
+                if not djid:
+                    continue
+                dependent_job = NodeJob.fetch(djid, connection=self.connection)
+                value = dependent_job.result_mapped[pname]
+                self.kwargs.update({key: value})
+            except Exception:
+                pass
 
     @property
     def func(self):
@@ -52,9 +59,53 @@ class NodeJob(Job):
         )
 
     def perform(self):
-        """Overriding the perform method of the parent class"""
+        """Overriding the perform method of the parent class.
+
+        Adds cache short-circuiting using metadata prepared at enqueue time.
+        """
+        # Always ensure kwargs reflect upstream job results
         self.update_kwargs()
-        return super().perform()
+        
+
+        meta = self.get_meta() or {}
+        cache_enabled = bool(meta.get("cache_enabled"))
+        cache_session = meta.get("cache_session")
+        cache_signature = meta.get("cache_signature")
+        node_id = meta.get("node_id")
+
+        # If caching is enabled and signature present, try to serve from cache
+        if cache_enabled and cache_session and cache_signature and node_id:
+            try:
+                cache = CacheManager(redis_client=self.connection, session_id=str(cache_session), ttl_seconds=meta.get("cache_ttl_seconds"))
+                cached = cache.get_if_fresh(node_id, cache_signature)
+            except Exception:
+                cached = None
+            if cached is not None:
+                # Short-circuit execution
+                try:
+                    self.meta = {**meta, **{"cache_hit": True}}
+                    self.save_meta()
+                except Exception:
+                    pass
+                return cached
+
+        # Normal execution
+        result = super().perform()
+
+        # Store to cache on success
+        if cache_enabled and cache_session and cache_signature and node_id:
+            try:
+                cache = CacheManager(redis_client=self.connection, session_id=str(cache_session), ttl_seconds=meta.get("cache_ttl_seconds"))
+                code_hash_val = meta.get("code_hash") or ""
+                cache.put(node_id, cache_signature, result, code_hash_val)
+                try:
+                    self.meta = {**meta, **{"cache_hit": False}}
+                    self.save_meta()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return result
 
     @property
     def result_mapped(self):
@@ -75,3 +126,99 @@ class NodeQueue(Queue):
     """Node Queue class is derived from the base Queue class in RQ"""
 
     job_class = NodeJob
+
+
+def _result_mapped_for_job(job: Job) -> dict:
+    """Compute a result mapping for a finished job based on its meta result_keys."""
+    try:
+        keys = (job.meta or {}).get("result_keys") or job.get_meta().get("result_keys")
+    except Exception:
+        keys = None
+    if not keys:
+        keys = ["result"]
+    res = job.result
+    if not isinstance(res, tuple):
+        res = (res,)
+    return {k: v for k, v in zip(keys, res)}
+
+
+def run_node_wrapper(func, literal_kwargs: dict | None = None):
+    """RQ worker-safe wrapper to resolve upstream dependencies, support caching,
+    then call the target function with complete kwargs.
+
+    Enqueue this wrapper instead of the user function so no custom Job class is required.
+    """
+    job = get_current_job()  # type: ignore
+    meta = {}
+    try:
+        meta = job.get_meta() or {}
+    except Exception:
+        pass
+    # Start with literals passed by the scheduler
+    kwargs = dict(literal_kwargs or {})
+
+    # Resolve inputs from dependent jobs using meta.node_connections
+    try:
+        node_conns = meta.get("node_connections")
+        if node_conns and node_conns.get("inputs"):
+            for key, conns in node_conns["inputs"].items():
+                if not conns:
+                    continue
+                oc = conns[0]
+                dep_job_id = oc.get("job_id")
+                port_name = oc.get("portName")
+                if not dep_job_id:
+                    continue
+                dep_job = Job.fetch(dep_job_id, connection=getattr(job, "connection", None))
+                mapping = _result_mapped_for_job(dep_job)
+                if port_name not in mapping:
+                    raise KeyError
+                kwargs[key] = mapping[port_name]
+    except Exception:
+        pass
+
+    # Caching short-circuit
+    cache_enabled = bool(meta.get("cache_enabled"))
+    cache_session = meta.get("cache_session")
+    cache_signature = meta.get("cache_signature")
+    node_id = meta.get("node_id")
+    cache_ttl = meta.get("cache_ttl_seconds")
+    node_type = meta.get("node_type")
+    if cache_enabled and cache_session and cache_signature and node_id:
+        try:
+            cache = CacheManager(redis_client=getattr(job, "connection", None), session_id=str(cache_session), ttl_seconds=cache_ttl)
+            cached = cache.get_if_fresh(node_id, cache_signature)
+        except Exception:
+            cached = None
+        if cached is not None:
+            try:
+                job.meta = {**meta, **{"cache_hit": True, "phase": "cached", "exec_ms": 0}}
+                job.save_meta()
+            except Exception:
+                pass
+            return cached
+
+    # Execute target
+    t0 = time.perf_counter()
+    try:
+        call = validate_call(config=ConfigDict(arbitrary_types_allowed=True))(func)
+        result = call(**kwargs)
+    except Exception:
+        # Try without validation (async or special callables)
+        result = func(**kwargs)
+    dt_ms = int((time.perf_counter() - t0) * 1000)
+
+    # Store in cache on success
+    if cache_enabled and cache_session and cache_signature and node_id:
+        try:
+            code_hash_val = meta.get("code_hash") or ""
+            cache = CacheManager(redis_client=getattr(job, "connection", None), session_id=str(cache_session), ttl_seconds=cache_ttl)
+            blob_dig = cache.put(node_id, cache_signature, result, code_hash_val)
+            try:
+                job.meta = {**meta, **{"cache_hit": False, "phase": "computed", "exec_ms": dt_ms, "blob_dig": blob_dig}}
+                job.save_meta()
+            except Exception:
+                pass
+        except Exception:
+            pass
+    return result
