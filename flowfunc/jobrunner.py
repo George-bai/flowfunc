@@ -179,8 +179,6 @@ class JobRunner:
         redis_url: Optional[str] = None,
         session_id: Optional[str] = None,
         cache_ttl_seconds: Optional[int] = 1800,
-        # Cancellation/interrupt options
-        interrupt_mode: str = "cooperative",
     ):
         self.flume_config = flume_config
         self.method = method
@@ -204,9 +202,9 @@ class JobRunner:
             self.cache = CacheManager(client, sid, ttl_seconds=cache_ttl_seconds)
             if not (self.cache and self.cache.ping()):
                 self.cache_enabled = False
+        # store computed signatures per node id (for downstream)
         # (reinitialized at run boundaries as appropriate)
         # Cancellation state
-        self.interrupt_mode = interrupt_mode or "cooperative"
         self.run_id: Optional[str] = None
         self._cancel_event: Optional[asyncio.Event] = None
         self._cancel_key: Optional[str] = None
@@ -310,10 +308,8 @@ class JobRunner:
         if not out_dict:
             return
         mapped_dict = deepcopy(out_dict)
-        # Reset signatures/code hashes for a fresh run (prevents leakage across runs)
         self._signatures = {}
         self._code_hashes = {}
-        # New run: reset cancel state and assign run id
         try:
             self.run_id = uuid.uuid4().hex
             self._cancel_event = asyncio.Event()
@@ -439,6 +435,7 @@ class JobRunner:
 
     async def run_async(self, mapped_dict) -> Dict[str, OutNode]:
         """Run the flow asynchronously"""
+        # Removed debug logging
         nodes_evaluted = []
         for nodeid, node in mapped_dict.items():
             # Storing the lock in the node itself so that dependent nodes
@@ -452,6 +449,7 @@ class JobRunner:
         """Evaluate the node and return the result"""
         out_node = mapped_dict[nodeid]
         out_node.status = "started"
+        # Removed debug logging
         if hasattr(out_node, "result") and out_node.result:
             return
         config_node = self.flume_config.get_node(out_node.type)
@@ -508,11 +506,13 @@ class JobRunner:
                 out_node.run_event.set()
                 return
             input_args[key] = dependent_node.result_mapped[connections[0].portName]
+        # Removed debug logging
         # At this point inputs are fully resolved; try cache before executing
         if self.cache and self.cache_enabled:
             signature, func_hash = self._build_signature(nodeid, out_node, input_args, mapped_dict, method)
             cached = self.cache.get_if_fresh(nodeid, signature)
             if cached is not None:
+                # Removed debug logging
                 out_node.result = cached
                 # map to outputs as usual
                 method_output = out_node.result
@@ -524,11 +524,13 @@ class JobRunner:
                 out_node.result_mapped = {x: y for x, y in zip(output_args, method_output)}
                 out_node.status = "finished"
                 self._signatures[nodeid] = signature
+                try:
+                    logger.info(f"ff: run_event.set node={nodeid}")
+                except Exception:
+                    pass
                 out_node.run_event.set()
                 return
-            else:
-                pass
-        # Respect cancel before compute
+
         if self.is_cancel_requested():
             out_node.status = "canceled"
             out_node.run_event.set()
@@ -537,7 +539,6 @@ class JobRunner:
             try:
                 call = validate_call(config=ConfigDict(arbitrary_types_allowed=True))(method)
                 coro = call(**input_args)
-                # Await with cancellation support
                 cancel_wait = asyncio.create_task(self._cancel_event.wait()) if self._cancel_event else None
                 task = asyncio.create_task(coro)
                 done, pending = await asyncio.wait(
@@ -562,12 +563,13 @@ class JobRunner:
                 out_node.status = "failed"
         else:
             try:
-                if (self.interrupt_mode or "cooperative").lower() == "process":
-                    # Run sync method in a subprocess to allow hard termination
+                if (self.method or "sync").lower() == "async":
                     result_q: mp.Queue = mp.Queue()
                     proc = mp.Process(target=_ff_proc_call, args=(method, input_args, result_q))
                     self._active_node_procs[nodeid] = proc
+                    t_start = time.perf_counter()
                     proc.start()
+                    last_log = t_start
                     # Poll for cancel while process is running
                     while proc.is_alive():
                         if self.is_cancel_requested():
@@ -580,8 +582,10 @@ class JobRunner:
                             self._active_node_procs.pop(nodeid, None)
                             out_node.run_event.set()
                             return
+                        now = time.perf_counter()
+                        if (now - last_log) > 0.5:
+                            last_log = now
                         await asyncio.sleep(0.05)
-                    # Process finished
                     self._active_node_procs.pop(nodeid, None)
                     if proc.exitcode and proc.exitcode != 0 and result_q.empty():
                         out_node.error = RuntimeError(f"Process exited with code {proc.exitcode}")
@@ -590,7 +594,6 @@ class JobRunner:
                         return
                     method_output = result_q.get() if not result_q.empty() else None
                 else:
-                    # Cooperative: run inline
                     method_output = validate_call(
                         config=ConfigDict(arbitrary_types_allowed=True)
                     )(method)(**input_args)
@@ -602,8 +605,6 @@ class JobRunner:
             return
         out_node.result = method_output
 
-        # Converting the method output to a tuple so that it can be mapped
-        # to the outputs dict
         if not isinstance(method_output, tuple):
             method_output = (method_output,)
         output_args = [
@@ -611,7 +612,6 @@ class JobRunner:
         ]
         out_node.result_mapped = {x: y for x, y in zip(output_args, method_output)}
         out_node.status = "finished"
-        # Write to cache post-compute
         if self.cache and self.cache_enabled:
             signature, func_hash = self._build_signature(nodeid, out_node, input_args, mapped_dict, method)
             try:
