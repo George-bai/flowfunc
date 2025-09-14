@@ -3,6 +3,9 @@ import asyncio
 import inspect
 from copy import copy, deepcopy
 from typing import Any, Callable, Dict, List, Optional
+import uuid
+import multiprocessing as mp
+import time
 
 from pydantic import validate_call, ConfigDict
 from .cache import (
@@ -100,6 +103,9 @@ def default_meta_method(
             "cache_ttl_seconds": ttl_seconds,
             "cache_signature": cache_signature,
             "code_hash": code_hash_val,
+            # cancellation
+            "run_id": getattr(job_runner, "run_id", None),
+            "cancel_key": getattr(job_runner, "_cancel_key", None),
             **job_runner.meta_data,
         },
         depends_on=depends_param,
@@ -173,6 +179,8 @@ class JobRunner:
         redis_url: Optional[str] = None,
         session_id: Optional[str] = None,
         cache_ttl_seconds: Optional[int] = 1800,
+        # Cancellation/interrupt options
+        interrupt_mode: str = "cooperative",
     ):
         self.flume_config = flume_config
         self.method = method
@@ -198,6 +206,55 @@ class JobRunner:
                 self.cache_enabled = False
         # store computed signatures per node id (for downstream)
         # (reinitialized at run boundaries as appropriate)
+        # Cancellation state
+        self.interrupt_mode = interrupt_mode or "cooperative"
+        self.run_id: Optional[str] = None
+        self._cancel_event: Optional[asyncio.Event] = None
+        self._cancel_key: Optional[str] = None
+        # Track active per-node processes for hard interrupts
+        self._active_node_procs: Dict[str, mp.Process] = {}
+
+    # ---------- Cancellation API ----------
+    def request_cancel(self, run_id: Optional[str] = None) -> bool:
+        """Request cancellation for the current run (cooperative). In distributed mode,
+        also sets a Redis cancel key so workers can short-circuit.
+        """
+        if run_id and getattr(self, "run_id", None) and run_id != self.run_id:
+            return False
+        try:
+            if self._cancel_event and not self._cancel_event.is_set():
+                self._cancel_event.set()
+        except Exception:
+            pass
+        # Best-effort distributed cancel flag via Redis
+        try:
+            if self._cancel_key and self.cache and hasattr(self.cache, "client"):
+                ttl = getattr(self.cache, "ttl", 1800) or 1800
+                self.cache.client.set(self._cancel_key, "1", ex=ttl)  # type: ignore[attr-defined]
+            elif self._cancel_key and self.cache and hasattr(self.cache, "redis"):
+                ttl = getattr(self.cache, "ttl", 1800) or 1800
+                self.cache.redis.set(self._cancel_key, "1", ex=ttl)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        # Attempt to terminate any active subprocesses (hard cancel)
+        try:
+            for nid, proc in list(self._active_node_procs.items()):
+                if proc and proc.is_alive():
+                    try:
+                        proc.terminate()
+                        proc.join(timeout=1)
+                    except Exception:
+                        pass
+            self._active_node_procs.clear()
+        except Exception:
+            pass
+        return True
+
+    def is_cancel_requested(self) -> bool:
+        try:
+            return bool(self._cancel_event and self._cancel_event.is_set())
+        except Exception:
+            return False
 
     def _build_signature(self, nodeid: str, out_node: OutNode, input_args: dict, mapped_dict: dict, method: Callable) -> tuple[str, str]:
         """Compute a deterministic signature for a node based on controls, upstream signatures and function code.
@@ -257,6 +314,17 @@ class JobRunner:
         # Reset signatures/code hashes for a fresh run (prevents leakage across runs)
         self._signatures = {}
         self._code_hashes = {}
+        # New run: reset cancel state and assign run id
+        try:
+            self.run_id = uuid.uuid4().hex
+            self._cancel_event = asyncio.Event()
+            # precompute a cancel_key for distributed workers to consult
+            if self.cache_enabled and self.cache and hasattr(self.cache, "session_id"):
+                self._cancel_key = f"ff:v1:{self.cache.session_id}:cancel:{self.run_id}"  # type: ignore[attr-defined]
+            else:
+                self._cancel_key = None
+        except Exception:
+            self._cancel_key = None
         if selected_node_ids:
             dependent_node_ids = self.dependent_nodes(selected_node_ids, mapped_dict)
             mapped_dict = {nodeid: mapped_dict[nodeid] for nodeid in dependent_node_ids}
@@ -394,6 +462,11 @@ class JobRunner:
         out_node.result = None
         out_node.result_mapped = {}
         input_args = {}
+        # Early cancel check
+        if self.is_cancel_requested():
+            out_node.status = "canceled"
+            out_node.run_event.set()
+            return
         for key, values in (out_node.inputData or {}).items():
             if not values:
                 continue
@@ -418,7 +491,16 @@ class JobRunner:
             dependent_nodeid = connections[0].nodeId
             dependent_node = mapped_dict[dependent_nodeid]
             out_node.status = "deferred"
+            # Wait for dependency or cancel
+            if self.is_cancel_requested():
+                out_node.status = "canceled"
+                out_node.run_event.set()
+                return
             await dependent_node.run_event.wait()
+            if self.is_cancel_requested():
+                out_node.status = "canceled"
+                out_node.run_event.set()
+                return
             if hasattr(dependent_node, "error") and dependent_node.error:
                 out_node.error = ErrorInDependentNode(
                     f"Error in node {dependent_node.id}"
@@ -447,19 +529,72 @@ class JobRunner:
                 return
             else:
                 pass
+        # Respect cancel before compute
+        if self.is_cancel_requested():
+            out_node.status = "canceled"
+            out_node.run_event.set()
+            return
         if inspect.iscoroutinefunction(method):
             try:
-                method_output = await validate_call(
-                    config=ConfigDict(arbitrary_types_allowed=True)
-                )(method)(**input_args)
+                call = validate_call(config=ConfigDict(arbitrary_types_allowed=True))(method)
+                coro = call(**input_args)
+                # Await with cancellation support
+                cancel_wait = asyncio.create_task(self._cancel_event.wait()) if self._cancel_event else None
+                task = asyncio.create_task(coro)
+                done, pending = await asyncio.wait(
+                    {task, cancel_wait} if cancel_wait else {task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if cancel_wait and cancel_wait in done and self.is_cancel_requested():
+                    try:
+                        task.cancel()
+                        try:
+                            await task
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                    out_node.status = "canceled"
+                    out_node.run_event.set()
+                    return
+                method_output = await task
             except Exception as e:
                 out_node.error = e
                 out_node.status = "failed"
         else:
             try:
-                method_output = validate_call(
-                    config=ConfigDict(arbitrary_types_allowed=True)
-                )(method)(**input_args)
+                if (self.interrupt_mode or "cooperative").lower() == "process":
+                    # Run sync method in a subprocess to allow hard termination
+                    result_q: mp.Queue = mp.Queue()
+                    proc = mp.Process(target=_ff_proc_call, args=(method, input_args, result_q))
+                    self._active_node_procs[nodeid] = proc
+                    proc.start()
+                    # Poll for cancel while process is running
+                    while proc.is_alive():
+                        if self.is_cancel_requested():
+                            try:
+                                proc.terminate()
+                                proc.join(timeout=1)
+                            except Exception:
+                                pass
+                            out_node.status = "canceled"
+                            self._active_node_procs.pop(nodeid, None)
+                            out_node.run_event.set()
+                            return
+                        await asyncio.sleep(0.05)
+                    # Process finished
+                    self._active_node_procs.pop(nodeid, None)
+                    if proc.exitcode and proc.exitcode != 0 and result_q.empty():
+                        out_node.error = RuntimeError(f"Process exited with code {proc.exitcode}")
+                        out_node.status = "failed"
+                        out_node.run_event.set()
+                        return
+                    method_output = result_q.get() if not result_q.empty() else None
+                else:
+                    # Cooperative: run inline
+                    method_output = validate_call(
+                        config=ConfigDict(arbitrary_types_allowed=True)
+                    )(method)(**input_args)
             except Exception as e:
                 out_node.error = e
                 out_node.status = "failed"
@@ -486,6 +621,23 @@ class JobRunner:
             except Exception:
                 pass
         out_node.run_event.set()
+
+
+# Helper for process-based execution (must be top-level picklable)
+def _ff_proc_call(func: Callable, kwargs: dict, result_q: mp.Queue):
+    try:
+        call = validate_call(config=ConfigDict(arbitrary_types_allowed=True))(func)
+        res = call(**(kwargs or {}))
+    except Exception:
+        res = func(**(kwargs or {}))
+    try:
+        result_q.put(res)
+    except Exception:
+        # If result not picklable, put None to avoid deadlock
+        try:
+            result_q.put(None)
+        except Exception:
+            pass
 
     async def run_distributed(
         self, mapped_dict: Dict[str, OutNode]

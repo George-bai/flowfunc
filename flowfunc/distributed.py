@@ -10,6 +10,7 @@ from .models import OutConnections
 from pydantic import validate_arguments, validate_call, ConfigDict
 from .cache import CacheManager
 import time
+from typing import Any
 
 
 class NodeJob(Job):
@@ -138,6 +139,25 @@ def run_node_wrapper(func, literal_kwargs: dict | None = None):
                 if port_name not in mapping:
                     raise KeyError
                 kwargs[key] = mapping[port_name]
+    except Exception:
+        pass
+
+    # Cancellation short-circuit (session/run scoped)
+    cancel_key = meta.get("cancel_key")
+    try:
+        conn = getattr(job, "connection", None)
+        if cancel_key and conn:
+            try:
+                if conn.get(cancel_key):
+                    # mark canceled in meta and return None
+                    try:
+                        job.meta = {**meta, **{"phase": "canceled", "exec_ms": 0}}
+                        job.save_meta()
+                    except Exception:
+                        pass
+                    return None
+            except Exception:
+                pass
     except Exception:
         pass
 
