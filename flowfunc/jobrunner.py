@@ -204,7 +204,6 @@ class JobRunner:
             self.cache = CacheManager(client, sid, ttl_seconds=cache_ttl_seconds)
             if not (self.cache and self.cache.ping()):
                 self.cache_enabled = False
-        # store computed signatures per node id (for downstream)
         # (reinitialized at run boundaries as appropriate)
         # Cancellation state
         self.interrupt_mode = interrupt_mode or "cooperative"
