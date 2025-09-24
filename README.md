@@ -1,55 +1,42 @@
 ![Flowfunc](./docs/source/images/logo.png)
 
-A node editor for [plotly dash](https://dash.plotly.com/)
+# Flowfunc
 
-Flowfunc is a plotly dash component which works as a web based node editor.
-You can create nodes based on python functions and connect them together to define
-the logic during runtime.
+Flowfunc is a Dash component that brings a node-based programming surface to Python apps. Nodes are defined from regular Python callables, composed visually with the React/Flume editor, and executed by a Python runtime that understands dependencies, async functions, distributed queues and caching. The project includes both the front-end component and the Python helpers required to build a complete workflow UI.
 
-[Demo](https://najeem.pythonanywhere.com/)
+## Highlights
 
-[![Animation](./docs/source/images/animation.gif)](https://najeem.pythonanywhere.com/)
+- **Dash-first node editor** built on [Flume](https://flume.dev) with custom styling, live port highlighting and toolbar toggles for pan/zoom to keep complex graphs manageable inside Dash layouts.【F:src/lib/components/Flowfunc.react.js†L18-L210】【F:src/lib/components/nodeeditor.css†L1-L37】
+- **Python-native node definitions** generated from function signatures, docstrings and annotations, including support for `Annotated` metadata, enums, dataclasses, Pydantic models, optional/union types and multi-output functions.【F:flowfunc/config.py†L70-L214】【F:tests/test_config.py†L31-L94】
+- **Extensible graph schema** via `Node`, `Port`, `PortFunction` and extra port definitions, allowing bespoke controls or clientside JavaScript to shape dynamic ports (e.g. column selectors driven by editor context).【F:flowfunc/models.py†L46-L139】【F:examples/dynamic.py†L18-L96】【F:examples/assets/funcs.js†L1-L52】
+- **Flexible execution engine** powered by `JobRunner` with synchronous, asynchronous, distributed and hybrid modes, partial re-execution, structured node status reporting and graceful error propagation.【F:flowfunc/jobrunner.py†L102-L348】【F:flowfunc/jobrunner.py†L349-L637】
+- **Distributed & cached runs** backed by `python-rq` and Redis. Jobs can be enqueued with custom queues/metadata, cancelled mid-flight, and short-circuited when cached results are valid across runs.【F:flowfunc/jobrunner.py†L26-L204】【F:flowfunc/jobrunner.py†L449-L637】【F:flowfunc/cache.py†L1-L140】
+- **Ready-to-run examples** showcasing synchronous flows, Redis-backed caching, dynamic nodes and RQ workers for distributed execution in the `examples/` folder.【F:examples/usage.py†L1-L215】【F:examples/usage_rq.py†L1-L120】【F:examples/README.md†L1-L34】
 
-The front end is created using the react package [Flume](https://flume.dev). The
-data model is also heavily influenced by this package.
 ## Installation
 
-**The package is still in alpha stage**. Please test out and let me know your
-comments.
+Flowfunc targets Python 3.10+ and is currently under active development. Install it directly from PyPI:
 
-### Basic installation
-
-```
+```bash
 pip install flowfunc
 ```
 
-### Distributed
-If you want to run your nodes using [rq](https://python-rq.org/) in a distributed
-manner.
-```
-pip install flowfunc[distributed]
-```
+Optional extras are available:
 
-### Full installation
+- `flowfunc[distributed]` – adds `python-rq` for queue-based execution.【F:setup.py†L23-L29】
+- `flowfunc[full]` – includes Dash and RQ in addition to the core package.【F:setup.py†L23-L29】
 
-In addition to the packages required for distributed run, this will install dash as well.
-```
-pip install flowfunc[full]
-```
-## Basic Usage
+Redis is required when using caching or distributed runners.
 
-A fully functioning dash app with Flowfunc node editor would look like below.
-The app will have the node editor and a button to evaluate the current state of
-the node editor. The result of the evaluation will be displayed in a separate `div`
-at the bottom.
+## Quick start
 
-The nodes are created from regular python functions using it's function signature.
-It is also possible to create a node manually which offers more control.
+The snippet below wires the component into a Dash application, generates nodes from Python functions, runs them when the user clicks a button and renders both results and node statuses.
 
 ```python
 from typing import Dict
 import dash
 from dash import html, Input, Output, State
+
 from flowfunc import Flowfunc
 from flowfunc.config import Config
 from flowfunc.jobrunner import JobRunner
@@ -57,135 +44,92 @@ from flowfunc.models import OutNode
 
 app = dash.Dash(__name__)
 
-# Functions can be converted to nodes
+# Functions become nodes based on their type hints and docstrings
+
 def add(a: int, b: int) -> int:
     """Add two numbers"""
     return a + b
 
+
 def subtract(a: int, b: int) -> int:
-    """Find difference between two numbers"""
+    """Subtract one number from another"""
     return a - b
 
-
-# A Config object contains info about the nodes and ports available in the node editor
-nodeeditor_config = Config.from_function_list([add, subtract])
-
-# A JobRunner object helps evaluate the nodes created using the node editor
-runner = JobRunner(nodeeditor_config)
+config = Config.from_function_list([add, subtract])
+runner = JobRunner(config, method="sync")
 
 app.layout = html.Div(
     [
-        html.Button(id="btn_run", children="Run"),
-        Flowfunc(id="nodeeditor", config=nodeeditor_config.dict()),
+        html.Button("Run", id="btn_run"),
+        Flowfunc(id="nodeeditor", config=config.dict()),
         html.Div(id="output"),
-    ], style={"height": "600px"}
+    ],
+    style={"height": "600px"},
 )
 
 
 @app.callback(
     Output("output", "children"),
+    Output("nodeeditor", "nodes_status"),
     Input("btn_run", "n_clicks"),
     State("nodeeditor", "nodes"),
 )
-def run_nodes(nclicks: int, output_nodes: Dict[str, OutNode]):
-    """Run the node layout"""
-    # The result is a dictionary of OutNode objects
-    result = runner.run(output_nodes)
-    output = []
-    for node in result.values():
-        # node.result contains the result of the node
-        output.append(
-            html.Div([html.H1(f"{node.type}: {node.id}"), html.P(str(node.result))])
-        )
-    return output
+def run_nodes(nclicks: int, nodes: Dict[str, OutNode]):
+    if not nodes:
+        return [], {}
+    results = runner.run(nodes)
+    output = [
+        html.Div([html.H4(f"{node.type}"), html.P(str(node.result))])
+        for node in results.values()
+    ]
+    return output, {node_id: node.status for node_id, node in results.items()}
+
 
 if __name__ == "__main__":
-    app.run() 
+    app.run_server(debug=True)
 ```
-![Basic example](docs/source/images/basic.png)
-### Explanation
 
-```python
-nodeeditor_config = Config.from_function_list([add, subtract])
-```
-The `Flowfunc` component requires a `Config` object which contains the list of all
-nodes as an input. You can create the list of nodes easily from a list of python
-functions using the class method `from_function_list`. It will accept async
-functions also.
+Every callback run returns a dictionary of `OutNode` instances with `result`, `result_mapped`, `status`, `error` and (for distributed runs) `job` metadata so you can display progress, store results or trigger follow-up work.【F:flowfunc/models.py†L88-L135】【F:tests/test_jobrunner.py†L11-L73】 The example also updates `nodes_status` so the editor highlights each node according to its state.【F:src/lib/components/nodeeditor.css†L15-L36】
 
-```python
-runner = JobRunner(nodeeditor_config)
-...
-result = runner.run(output_nodes)
-```
-`JobRunner` object helps evaluate the output of the front end node editor by making
-sure the inputs and outputs are routed properly. It takes in the output from the
-nodeeditor, parses it using pydantic and creates a dict of `OutNode` objects, evaluates
-each of the objects by making sure the dependent inputs are routed properly.
-It uses the functions defined in the config object to evaluate a node.
-The output of `runner.run` is the same dictionary that it parsed initially, but
-now with an addtional `result` attribute on each node. If you are running in
-a distributed way, it will have a `job_id` attribute on every node. You can use
-this `job_id` and the `queue` object to retrieve the results of the node.
+## Running flows with `JobRunner`
 
-```python
-Flowfunc(id="nodeeditor", config=nodeeditor_config.dict())
-```
-This is the dash component with `id` equal to `nodeeditor`. You need to pass in
-the config object created previously, but converted to a dictionary.
+`JobRunner` interprets the node graph returned by the component, resolves dependencies, and executes nodes in topological order.【F:flowfunc/jobrunner.py†L253-L406】 Key capabilities include:
 
-## More examples
+- **Execution modes** – choose `sync`, `async`, `distributed` or `async_distributed` depending on whether you want blocking, coroutine-returning, RQ-backed or hybrid behaviour.【F:flowfunc/jobrunner.py†L299-L336】 Setting `same_worker=True` lets distributed runs execute inside the worker process for debugging.【F:flowfunc/jobrunner.py†L490-L527】
+- **Selective runs** – provide `selected_node_ids` to re-evaluate only the chosen outputs and their dependencies, which is ideal when editing large graphs.【F:flowfunc/jobrunner.py†L321-L334】【F:tests/test_jobrunner.py†L75-L97】
+- **Status + errors** – each node tracks `status` transitions (`started`, `deferred`, `finished`, `failed`, `canceled`, etc.) and propagates exceptions from upstream nodes as `ErrorInDependentNode`.【F:flowfunc/jobrunner.py†L366-L494】【F:flowfunc/models.py†L108-L134】
+- **Cancellation** – call `request_cancel()` to cooperatively stop in-flight runs; distributed workers check a Redis flag and local subprocesses are terminated when possible.【F:flowfunc/jobrunner.py†L132-L204】
+- **Per-node settings** – attach an optional `settings` dict to a node to forward custom keyword arguments to `rq.Queue.enqueue`, such as a specific `job_id` or queue.【F:flowfunc/jobrunner.py†L563-L612】【F:tests/test_distributed.py†L39-L71】
 
-Look into the examples folder to see a more elaborate example with better looking
-interface using `dash-boostrap-components`. There is also an example which uses
-the distributed method where each node is evaluated in a separate `rqworker`.
+### Caching
 
-## Nodes
+Enable caching by passing `cache_enabled=True`, a Redis URL, session identifier and TTL. Flowfunc hashes each node using its literal controls, upstream signatures and the function source so results are reused when nothing relevant changed.【F:flowfunc/jobrunner.py†L205-L282】【F:flowfunc/jobrunner.py†L406-L494】【F:flowfunc/cache.py†L72-L140】 Worker-side helpers short-circuit execution when a cached payload is available and automatically refresh cache entries after successful runs.【F:flowfunc/distributed.py†L83-L179】
 
-`Nodes` are the building blocks which you can connect together using their exposed
-`Ports`. Flowfunc let's you easily create nodes from python functions by inspecting
-their signature and type annotations. The parameters of the function becomes the
-input ports and return value of the function becomes the output port. You can give
-different types of type annotations. Even `dataclasses` and `pydantic` classes.
-The parser does it's best to interpret the type annotations and render an 
-equivalent node with different types of controls on it. If you aren't happy with
-the controls that the parser creted, you can manually specify how the node should
-be constructed.
+## Distributed execution
 
-Once the parser processed the function signature, it creates a
-`Node` object which is a `pydantic` object.
+When `method` is `distributed` or `async_distributed`, Flowfunc enqueues nodes onto `python-rq` using the custom `NodeQueue`/`NodeJob` classes. Dependencies are resolved automatically, results are exposed through `job_id` metadata, and jobs inherit cache and cancellation settings.【F:flowfunc/distributed.py†L1-L134】【F:flowfunc/jobrunner.py†L507-L637】 Use the included CLI snippet from `examples/README.md` to start a worker with the correct queue and job classes.【F:examples/README.md†L18-L34】
 
-## Ports
-`Ports` are the inputs and outputs of a `Node`. So they basically mean the inputs
-or outputs of a function. Ports can render controls in the node and let the user
-interact with them and pass in data. There are some ports (read datatypes) which
-come with a default control. They are `int`, `float`, `str`, `bool`, `color`,
-`time`, `date`, `month`, `week`. Some of these are not standard python types and
-hence, you cannot use them in type annotation directly. If you want to use type
-annotation, create a custom type with these names. In future, the plan is to create
-some kind of interface to make this process easier and also make more controls
-available.
+## Defining nodes and ports
 
-When you annotate a argument with a `dataclass` or `pydantic` object, `flowfunc`
-will inspect the attributes of this class and it will try to create controls for
-each of the attributes of the object. As of now, `flowfunc` cannot handle nested
-`pydantic` or `dataclass` objects.
+- **Automatic generation** – `Config.from_function_list()` inspects each callable’s signature, docstring and annotations to create `Node`/`Port` models and default controls.【F:flowfunc/config.py†L69-L214】 Docstrings seed node descriptions and return annotations define the number and type of outputs.【F:flowfunc/config.py†L147-L194】
+- **Rich types** – enums become dropdowns, optional/union types expand accepted connections, dataclasses and Pydantic models generate nested controls, and multi-value returns create multiple output ports.【F:flowfunc/config.py†L200-L294】【F:tests/test_config.py†L45-L94】 The `typing.Annotated` metadata lets you override labels, defaults and port visibility without leaving Python.【F:usage.py†L11-L70】
+- **Custom nodes** – instantiate `Node`, `Port` and `PortFunction` manually to introduce bespoke behaviours (e.g. dynamic display nodes or incremental port lists). Client-side helpers can live in Dash’s `assets/` directory and receive editor context to render dynamic controls.【F:examples/dynamic.py†L18-L123】【F:examples/assets/funcs.js†L1-L52】 You can also extend the config with `extra_ports` to expose additional control widgets or composite inputs.【F:examples/usage.py†L85-L111】
 
-A default set of ports are automatically created when the nodes are processed
-from python functions. `Port` object is also a pydantic object.
+## Dash component API
 
-## Config
-`Config` object holds info about all the nodes and ports available in the node
-editor. It's a direct equivalent of [Flume](https://flume.dev)'s config object,
-but modified so that the data can be serialized at the server side and sent to
-the client (ie; no javascript functions). In future, the plan is to make it possible
-to define functions in javascript as well.
+The `Flowfunc` component exposes several properties you can drive from callbacks:
 
-`Config.nodes` will contain all the `Node` pydantic objects and `Config.ports`
-will contain all the `Port` pydantic objects. 
+- `config` (required) – serialized `Config` dict generated on the server.【F:flowfunc/Flowfunc.py†L23-L78】
+- `nodes` / `comments` – current graph state emitted from the editor on every change.【F:src/lib/components/Flowfunc.react.js†L231-L272】
+- `nodes_status` – map of node IDs to statuses for styling the editor (classes are provided in `nodeeditor.css`).【F:flowfunc/models.py†L108-L130】【F:src/lib/components/nodeeditor.css†L15-L36】
+- `selected_nodes`, `double_clicked_node` – UI events raised by built-in listeners for selections and double clicks.【F:src/lib/components/Flowfunc.react.js†L282-L330】
+- `context` – arbitrary JSON data pushed from callbacks back into the editor; dynamic port functions can read it to populate controls (e.g. DataFrame column lists).【F:src/lib/components/Flowfunc.react.js†L108-L210】【F:examples/assets/funcs.js†L21-L52】
+- `type_safety`, `disable_zoom`, `disable_pan`, `space_to_pan`, `disable_focus`, `initial_scale` – runtime toggles that let end users adapt the editing experience.【F:flowfunc/Flowfunc.py†L23-L78】【F:src/lib/components/Flowfunc.react.js†L174-L210】【F:src/lib/components/Flowfunc.react.js†L340-L383】
 
-## JobRunner
-`JobRunner` object helps process the output of the node editor. `JobRunnber` can
-run in as blocking (sync), return an awaitable (async), return a dict of rq
-jobs (distributed) or await on a dict of rq jobs (async_distributed).
+## Examples and demo apps
 
+- `examples/usage.py` – Dash app comparing synchronous vs asynchronous runners with Redis caching, plus context-driven column selectors.【F:examples/usage.py†L1-L215】
+- `examples/dynamic.py` – demonstrates dynamic port generation and serialization helpers.【F:examples/dynamic.py†L18-L181】
+- `examples/usage_rq.py` – runs the same graph in distributed mode with `rqworker` workers.【F:examples/usage_rq.py†L1-L120】
+
+Launch the demo development server with `npm start` (after `npm install`) and rebuild the component bundle with `npm run build`. Python tests live in `tests/` and can be executed via `pytest` once dependencies from `requirements.txt` are installed.【F:AGENTS.md†L8-L20】【F:tests/test_jobrunner.py†L1-L97】
