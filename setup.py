@@ -3,10 +3,10 @@ from pathlib import Path
 from setuptools import setup
 
 here = Path(__file__).parent
-package = json.loads((here / "package.json").read_text())
-long_description = (here / "README.md").read_text()
+package = json.loads((here / "package.json").read_text(encoding="utf-8"))
+long_description = (here / "README.md").read_text(encoding="utf-8")
 
-with open("package.json") as f:
+with open("package.json", encoding="utf-8") as f:
     package = json.load(f)
 
 package_name = package["name"].replace(" ", "_").replace("-", "_")
