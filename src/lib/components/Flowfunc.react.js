@@ -38,7 +38,7 @@ class FlowfuncClass extends Component {
   // Compute and apply a transform that fits all nodes in view
   fitToView = () => {
     try {
-      const container = this.container?.current;
+      const container = this.container && this.container.current;
       if (!container) return;
       const stage = container.querySelector('[data-flume-stage="true"], [data-flume-component="stage"]');
       if (!stage) return;
@@ -106,7 +106,7 @@ class FlowfuncClass extends Component {
       const TTarget = { x: sTarget * wcx, y: sTarget * wcy };
 
       // Prefer patched Flume API if available
-      const api = this.nodeEditor?.current;
+      const api = this.nodeEditor && this.nodeEditor.current;
       if (api && typeof api.setStageTransform === 'function') {
         api.setStageTransform({ scale: sTarget, translate: TTarget });
         return;
@@ -264,7 +264,7 @@ class FlowfuncClass extends Component {
               }
               
               // For other dynamic functions, try to find them in window
-              var func = window.dash_clientside?.flowfunc?.[inputs.path];
+              var func = (window.dash_clientside && window.dash_clientside.flowfunc && window.dash_clientside.flowfunc[inputs.path]);
               if (!func) {
                 return [];
               }
