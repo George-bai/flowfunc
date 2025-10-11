@@ -6,7 +6,7 @@ Flowfunc is a Dash component that brings a node-based programming surface to Pyt
 
 ## Highlights
 
-- **Dash-first node editor** built on [Flume](https://flume.dev) with custom styling, live port highlighting and toolbar toggles for pan/zoom to keep complex graphs manageable inside Dash layouts.【F:src/lib/components/Flowfunc.react.js†L18-L210】【F:src/lib/components/nodeeditor.css†L1-L37】
+- **Dash-first node editor** built on [Flume](https://flume.dev) with custom styling, live port highlighting and toolbar toggles for pan/zoom to keep complex graphs manageable inside Dash layouts. A new Fit‑to‑View action zooms and centers all nodes to the viewport for quick orientation.【F:src/lib/components/Flowfunc.react.js†L18-L210】【F:src/lib/components/nodeeditor.css†L1-L37】
 - **Python-native node definitions** generated from function signatures, docstrings and annotations, including support for `Annotated` metadata, enums, dataclasses, Pydantic models, optional/union types and multi-output functions.【F:flowfunc/config.py†L70-L214】【F:tests/test_config.py†L31-L94】
 - **Extensible graph schema** via `Node`, `Port`, `PortFunction` and extra port definitions, allowing bespoke controls or clientside JavaScript to shape dynamic ports (e.g. column selectors driven by editor context).【F:flowfunc/models.py†L46-L139】【F:examples/dynamic.py†L18-L96】【F:examples/assets/funcs.js†L1-L52】
 - **Flexible execution engine** powered by `JobRunner` with synchronous, asynchronous, distributed and hybrid modes, partial re-execution, structured node status reporting and graceful error propagation.【F:flowfunc/jobrunner.py†L102-L348】【F:flowfunc/jobrunner.py†L349-L637】
@@ -126,10 +126,26 @@ The `Flowfunc` component exposes several properties you can drive from callbacks
 - `context` – arbitrary JSON data pushed from callbacks back into the editor; dynamic port functions can read it to populate controls (e.g. DataFrame column lists).【F:src/lib/components/Flowfunc.react.js†L108-L210】【F:examples/assets/funcs.js†L21-L52】
 - `type_safety`, `disable_zoom`, `disable_pan`, `space_to_pan`, `disable_focus`, `initial_scale` – runtime toggles that let end users adapt the editing experience.【F:flowfunc/Flowfunc.py†L23-L78】【F:src/lib/components/Flowfunc.react.js†L174-L210】【F:src/lib/components/Flowfunc.react.js†L340-L383】
 
+### View controls and Fit‑to‑View
+
+- The editor includes a small control cluster (bottom‑left) to toggle Zoom and Pan, and a new Fit‑to‑View button that automatically zooms and centers all nodes in the current canvas.
+- Programmatic trigger: set `fit_to_view_request` to a changing number (e.g., a button’s `n_clicks`) to trigger the same action from Dash callbacks.
+- The Fit‑to‑View feature computes a viewport‑aware transform with a margin and updates the Flume stage. When Flume’s stage setters are available (see optional patch below), the transform applies instantly; otherwise a smooth wheel‑based animation is used.
+
+Optional, recommended: expose Flume stage setters for instant Fit‑to‑View
+
+1. Install dependencies: `npm install`
+2. Apply the local patch once per install: `npm run patch:flume`
+3. Rebuild wrappers: `npm run build`
+
+This exposes `setStageTransform`, `setScale`, and `setTranslate` on the Flume `NodeEditor` ref. Fit‑to‑View uses the direct API when available (works even if zoom is disabled).
+
 ## Examples and demo apps
 
 - `examples/usage.py` – Dash app comparing synchronous vs asynchronous runners with Redis caching, plus context-driven column selectors.【F:examples/usage.py†L1-L215】
 - `examples/dynamic.py` – demonstrates dynamic port generation and serialization helpers.【F:examples/dynamic.py†L18-L181】
 - `examples/usage_rq.py` – runs the same graph in distributed mode with `rqworker` workers.【F:examples/usage_rq.py†L1-L120】
+- `examples/fit_to_view.py` – quick manual test of the new Fit‑to‑View toolbar button.
+- `examples/fit_to_view_trigger.py` – programmatic Fit‑to‑View via the `fit_to_view_request` prop.
 
 Launch the demo development server with `npm start` (after `npm install`) and rebuild the component bundle with `npm run build`. Python tests live in `tests/` and can be executed via `pytest` once dependencies from `requirements.txt` are installed.【F:AGENTS.md†L8-L20】【F:tests/test_jobrunner.py†L1-L97】

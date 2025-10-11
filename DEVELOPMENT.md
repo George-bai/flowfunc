@@ -58,13 +58,23 @@ Flowfunc is a Plotly Dash component that provides a node editor interface based 
    npm install
    ```
 
-5. **Build the JavaScript components**
+5. **Apply the optional Flume patch (recommended)**
+
+   The editor’s Fit‑to‑View and future view actions work best when Flume exposes stage setters. Apply a small local patch after `npm install`:
 
    ```bash
-   npm run build:js
+   npm run patch:flume
    ```
 
-6. **Test the installation**
+   This patches `node_modules/flume/dist/NodeEditor.js` to expose `setStageTransform`, `setScale` and `setTranslate`. Safe to re‑run; it will skip if already applied.
+
+6. **Build the component bundle and regenerate wrappers**
+
+   ```bash
+   npm run build
+   ```
+
+7. **Test the installation**
 
    Run one of the example applications to verify your setup:
 
@@ -156,12 +166,15 @@ Flowfunc is a Plotly Dash component that provides a node editor interface based 
 To build a distribution package:
 
 ```bash
-# Build JavaScript components
+# Build JavaScript and regenerate Python/R/Julia wrappers
 npm run build
 
-# Create Python distribution
-python setup.py sdist bdist_wheel
+# Create Python distribution (PEP 517)
+python -m pip install --upgrade build
+python -m build
 ```
+
+Note: `setup.py install` is deprecated. Prefer `python -m build` and `pip install dist/*.whl`.
 
 ## Troubleshooting
 
@@ -169,6 +182,7 @@ python setup.py sdist bdist_wheel
 - **JavaScript build errors**: Check Node.js and npm versions, and ensure all dependencies are installed
 - **UI rendering issues**: Check browser console for React errors
 - **Missing dash-generate-components**: This tool might not be available in newer versions, focus on building the JavaScript components manually with `npm run build:js`
+- **Windows patch-package issues**: If `patch-package` fails to parse patches on Windows, use `npm run patch:flume` instead of a postinstall hook. It’s idempotent and cross‑platform.
 
 ## Contributing
 

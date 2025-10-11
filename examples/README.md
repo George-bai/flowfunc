@@ -43,3 +43,17 @@ thing another flow run needs to know is the job id to retrieve that result),
 scheduled tasks (using the scheduler feature of python-rq), retries, etc.
 
 I am hoping to add more examples later.
+
+## Fit-to-View tests
+
+Two small apps exercise the new Fit‑to‑View feature in the editor:
+
+```
+python examples/fit_to_view.py            # Manual: click the toolbar Fit button
+python examples/fit_to_view_trigger.py    # Programmatic: triggers via Dash prop
+```
+
+Notes:
+
+- For best results, apply the local Flume patch once per install: `npm run patch:flume`, then `npm run build`.
+- Without the patch, Fit‑to‑View falls back to a smooth zoom animation and requires zoom to be enabled.
