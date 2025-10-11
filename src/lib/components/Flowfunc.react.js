@@ -35,6 +35,121 @@ class FlowfuncClass extends Component {
     this.updateConfig();
   }
 
+  // Compute and apply a transform that fits all nodes in view
+  fitToView = () => {
+    try {
+      const container = this.container?.current;
+      if (!container) return;
+      const stage = container.querySelector('[data-flume-stage="true"], [data-flume-component="stage"]');
+      if (!stage) return;
+
+      // Collect all node rects
+      const nodeEls = container.querySelectorAll('[data-flume-component="node"]');
+      if (!nodeEls || nodeEls.length === 0) return;
+
+      // Stage viewport rect
+      const rect = stage.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+
+      // Get current scale and translate from inline transforms
+      const translateWrapper = stage.children && stage.children[0];
+      const scaleWrapper = translateWrapper && translateWrapper.children && translateWrapper.children[0];
+
+      const parseScale = (el) => {
+        if (!el) return 1;
+        const t = el.style && el.style.transform ? el.style.transform : '';
+        const m = t.match(/scale\(([^)]+)\)/);
+        const s = m ? parseFloat(m[1]) : 1;
+        return isFinite(s) && s > 0 ? s : 1;
+      };
+
+      const parseTranslate = (el) => {
+        if (!el) return { x: 0, y: 0 };
+        const t = el.style && el.style.transform ? el.style.transform : '';
+        const m = t.match(/translate\(([-0-9.]+)px,\s*([-0-9.]+)px\)/);
+        if (m) {
+          const tx = parseFloat(m[1]);
+          const ty = parseFloat(m[2]);
+          // transform is translate(-Tx, -Ty), so invert sign
+          return { x: isFinite(tx) ? -tx : 0, y: isFinite(ty) ? -ty : 0 };
+        }
+        return { x: 0, y: 0 };
+      };
+
+      const s0 = parseScale(scaleWrapper);
+      const T0 = parseTranslate(translateWrapper);
+
+      // Compute union bbox of nodes in screen coords
+      let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
+      nodeEls.forEach((el) => {
+        const r = el.getBoundingClientRect();
+        left = Math.min(left, r.left);
+        right = Math.max(right, r.right);
+        top = Math.min(top, r.top);
+        bottom = Math.max(bottom, r.bottom);
+      });
+      if (!isFinite(left) || !isFinite(right) || !isFinite(top) || !isFinite(bottom)) return;
+
+      let bboxW = Math.max(1, right - left);
+      let bboxH = Math.max(1, bottom - top);
+
+      const margin = 40; // pixels
+      const targetScaleByW = s0 * ((rect.width - 2 * margin) / bboxW);
+      const targetScaleByH = s0 * ((rect.height - 2 * margin) / bboxH);
+      let sTarget = Math.max(0.1, Math.min(7, Math.min(targetScaleByW, targetScaleByH)));
+
+      // Center in world-space and compute target translate
+      const cx = (left + right) / 2;
+      const cy = (top + bottom) / 2;
+      const wcx = (cx - rect.x - rect.width / 2 + T0.x) / s0;
+      const wcy = (cy - rect.y - rect.height / 2 + T0.y) / s0;
+      const TTarget = { x: sTarget * wcx, y: sTarget * wcy };
+
+      // Prefer patched Flume API if available
+      const api = this.nodeEditor?.current;
+      if (api && typeof api.setStageTransform === 'function') {
+        api.setStageTransform({ scale: sTarget, translate: TTarget });
+        return;
+      }
+
+      // Fallback: animate with wheel events if zoom is enabled
+      if (this.props.disable_zoom) return; // cannot animate without wheel handler
+
+      const animateStep = () => {
+        const s = animateStep._s;
+        const T = animateStep._T;
+        if (Math.abs(sTarget - s) < 1e-3) return;
+        const dir = sTarget > s ? 1 : -1;
+        const sNext = dir > 0 ? Math.min(s + 0.05, sTarget) : Math.max(s - 0.05, sTarget);
+        const ratio = sNext / s;
+        const denom = ratio - 1;
+        if (Math.abs(denom) < 1e-6) return;
+        const alphaX = (TTarget.x - T.x) / denom - T.x;
+        const alphaY = (TTarget.y - T.y) / denom - T.y;
+        const clientX = rect.x + rect.width / 2 + alphaX;
+        const clientY = rect.y + rect.height / 2 + alphaY;
+        const deltaY = (s - sNext) / 0.005; // will be within [-10, 10]
+        const evt = new WheelEvent('wheel', {
+          clientX,
+          clientY,
+          deltaY,
+          bubbles: true,
+          cancelable: true
+        });
+        stage.dispatchEvent(evt);
+        // Update local state for next iteration
+        animateStep._s = sNext;
+        animateStep._T = { x: TTarget.x, y: TTarget.y };
+        window.requestAnimationFrame(animateStep);
+      };
+      animateStep._s = s0;
+      animateStep._T = { x: T0.x, y: T0.y };
+      window.requestAnimationFrame(animateStep);
+    } catch (e) {
+      // Silently ignore fit errors
+    }
+  }
+
   createDisplayNodePorts = (ports, inputData, connections, context) => {
     // Auto-expanding display node with compacting behavior
     const connected_ports = new Set();
@@ -296,6 +411,12 @@ class FlowfuncClass extends Component {
     }
     
     this.setNodesStatus();
+
+    // Programmatic fit-to-view trigger from Dash
+    if (this.props.fit_to_view_request !== prevProps.fit_to_view_request &&
+        typeof this.props.fit_to_view_request !== 'undefined') {
+      this.fitToView();
+    }
   }
 
   setNodeStatus = (id, status) => {
@@ -423,7 +544,7 @@ class FlowfuncClass extends Component {
               <path d="M8 11H14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
-          
+
           {/* Pan button */}
           <button
             onClick={() => this.props.setProps({ disable_pan: !this.props.disable_pan })}
@@ -448,6 +569,32 @@ class FlowfuncClass extends Component {
               <path d="M15 11V9.5C15 8.67157 15.6716 8 16.5 8C17.3284 8 18 8.67157 18 9.5V14.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
               <path d="M6 12.4V14.5C6 17.5376 8.46243 20 11.5 20H12.5C15.5376 20 18 17.5376 18 14.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
               <path d="M6 12.5C6 11.6716 6.67157 11 7.5 11C8.32843 11 9 11.6716 9 12.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+          </button>
+
+          {/* Fit-to-View button */}
+          <button
+            onClick={this.fitToView}
+            style={{
+              padding: '6px',
+              backgroundColor: '#2a2a2a',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              width: '32px',
+              height: '32px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title={'Fit to View'}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 9V5H8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M16 5H20V9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M20 15V19H16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M8 19H4V15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
 
@@ -536,6 +683,12 @@ FlowfuncClass.propTypes = {
    * Disable zoom option
    */
   space_to_pan: PropTypes.bool,
+
+  /**
+   * Incrementing number to request a fit-to-view action.
+   * Increase this value (e.g., n_clicks) to programmatically trigger Fit.
+   */
+  fit_to_view_request: PropTypes.number,
 
   /**
    * Disable automatic focusing behavior in the editor (Flume 1.1.0)
