@@ -555,8 +555,103 @@ FlowfuncClass.propTypes = {
 };
 
 // Copy PropTypes to wrapper component
-FlowfuncWithPortHighlighter.defaultProps = FlowfuncClass.defaultProps;
-FlowfuncWithPortHighlighter.propTypes = FlowfuncClass.propTypes;
+FlowfuncWithPortHighlighter.defaultProps = {};
+
+FlowfuncWithPortHighlighter.propTypes = {
+  /**
+   * The ID used to identify this component in Dash callbacks.
+   */
+  id: PropTypes.string,
+
+  /**
+   * The style of the container div
+   */
+  style: PropTypes.object,
+
+  /**
+   * The nodes of the node editor
+   */
+  nodes: PropTypes.object,
+
+  /**
+   * The status of each node on the editor
+   */
+  nodes_status: PropTypes.object,
+
+  /**
+   * A property denoting the status of the editor
+   * Following statuses are possible.
+   * ["client", "server"]
+   */
+  editor_status: PropTypes.string,
+
+  /**
+   * The nodes of the node editor
+   */
+  selected_nodes: PropTypes.array,
+
+  /**
+   * Node on which a double click event was registered
+   */
+  double_clicked_node: PropTypes.string,
+
+  /**
+   * Comments in the node editor
+   */
+  comments: PropTypes.object,
+
+  /**
+   * If any port can connect to any other port
+   */
+  type_safety: PropTypes.bool,
+
+  /**
+   * Default nodes present in the editor
+   * A list of nodes from the config
+   */
+  default_nodes: PropTypes.array,
+
+  /**
+   * Pass extra data to nodes
+   */
+  context: PropTypes.object,
+
+  /**
+   * Initial zoom level of the editor
+   */
+  initial_scale: PropTypes.number,
+
+  /**
+   * Disable zoom option
+   */
+  disable_zoom: PropTypes.bool,
+
+  /**
+   * Disable zoom option
+   */
+  disable_pan: PropTypes.bool,
+
+  /**
+   * Disable zoom option
+   */
+  space_to_pan: PropTypes.bool,
+
+  /**
+   * Disable automatic focusing behavior in the editor (Flume 1.1.0)
+   */
+  disable_focus: PropTypes.bool,
+
+  /**
+   * The available port types and node types
+   */
+  config: PropTypes.object,
+
+  /**
+   * Dash-assigned callback that should be called to report property changes
+   * to Dash, to make them available for callbacks.
+   */
+  setProps: PropTypes.func
+};
 
 // Export the wrapper component as default
 export default FlowfuncWithPortHighlighter;
