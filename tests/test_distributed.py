@@ -28,7 +28,6 @@ def test_add_sync_distributed():
     job = NodeJob.fetch(first_node.job_id, connection=connection)
     assert job
     assert job.get_status() == "finished"
-    assert job.result == 3
     assert job.result_mapped == {"result": 3}
 
 def test_add_async_distributed():
@@ -49,7 +48,7 @@ def test_add_async_distributed():
     job = NodeJob.fetch(first_node.job_id, connection=connection)
     assert job
     assert job.get_status() == "finished"
-    assert job.result == 3
+    assert job.result_mapped == {"result": 3}
 
 def test_add_async_distributed_same_worker():
     """Testing a distributed run"""
@@ -60,7 +59,7 @@ def test_add_async_distributed_same_worker():
     nodes = json.loads(Path("tests/nodes_add.node").read_text())
     job = runner.run(nodes)
     time.sleep(1)
-    results = job.result
+    results = job.result_mapped.get("result")
     assert results
     assert isinstance(results, dict)
     first_node = OutNode(**results["node_1"])
@@ -85,4 +84,4 @@ def test_node_with_settings():
     job = NodeJob.fetch(custom_job_id, connection=connection)
     assert job
     assert job.get_status() == "finished"
-    assert job.result == 3
+    assert job.result_mapped == {"result": 3}

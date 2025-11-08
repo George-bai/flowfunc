@@ -12,7 +12,9 @@
 - Setup (Node): `npm install`
 - Build JS + backends: `npm run build` (webpack bundle + `dash-generate-components` to refresh Python/R/Julia wrappers).
 - Dev server: `npm start` (serves the demo from `src/demo/`).
-- Python tests: `pytest` (uses `pytest.ini`); examples: `pytest -k node_creation -q`.
+- Python tests: `pytest` (uses `pytest.ini`).
+- Distributed tests: `pytest -k distributed -vv` (requires a local Redis server).
+- Cycle solver tests: `pytest -k "cycles or scc_adv or scc_publish" -q`.
 
 ## Coding Style & Naming Conventions
 - Python: 4‑space indents, type hints preferred, snake_case for functions/vars, PascalCase for classes, module names are lowercase. Lint with Pylint settings in `.pylintrc`.
@@ -22,6 +24,7 @@
 ## Testing Guidelines
 - Framework: Pytest only (current repo). Place tests under `tests/` named `test_*.py`. Parametrize where possible and cover error paths (see `tests/test_node_creation.py`).
 - Keep tests deterministic; avoid network and external state. Run locally with `pytest -vv` before opening a PR.
+- Distributed tests depend on Redis. Skip or disable them locally if Redis is unavailable.
 
 ## Commit & Pull Request Guidelines
 - Commits: Short, imperative summaries; group related changes. Reference issues like `(#123)` when applicable. History shows patterns such as “Upgrade …”, “Bugfix: …”.
@@ -30,4 +33,12 @@
 ## Security & Configuration Tips
 - Python 3.10+; use a recent Node LTS. Avoid naming files `dash.py` in your working dir (can break imports).
 - Secrets/config: none required for local dev. Avoid committing large artifacts; rely on the build to generate bundles and backends.
+
+## Cycle Support & Limitations
+- Cycles (recycle streams) are supported in `sync` and `async` modes via an SCC fixed‑point solver (Jacobi with optional under‑relaxation, plus Wegstein acceleration).
+- Distributed modes do not support cycles; submitting a cyclic graph will raise a `QueueError`.
+- Wegstein activates from the second iteration and clamps the mixing factor by default with `scc_wegstein_qmin=0.0`, `scc_wegstein_qmax=2.0`.
+- Non‑convergence errors include iteration count, max delta, and a sample of worst ports; for non‑numeric internals, provide `scc_initial`.
+ - Tolerances: `scc_tolerance` (global), optional `scc_rtol/scc_atol` for numeric/array‑like streams; overrides via `scc_port_tolerance`, `scc_type_tolerance`, and per‑edge `scc_edge_tolerance`.
+ - DataFrames: when all columns are numeric and `scc_df_numeric_as_array=True`, they are treated as arrays (vector delta + linear mixing + Wegstein); `scc_df_align` controls strict vs reindex alignment.
 

@@ -10,11 +10,12 @@ Flowfunc is a Plotly Dash component that provides a node editor interface based 
 - Connect nodes together visually in a web interface
 - Define logic during runtime
 - Execute the workflow with the JobRunner in various modes (sync, async, distributed)
+  - Cycles (recycle streams) supported in sync/async via SCC fixed‑point solver; distributed modes currently gate cyclic graphs
 
 ## Key Components
 
 - **Config**: Manages nodes and ports available in the editor
-- **JobRunner**: Processes the node editor output (sync, async, distributed)
+- **JobRunner**: Processes the node editor output (sync, async, distributed). Detects SCCs for cycles and solves cyclic components via fixed‑point iteration (Jacobi + under‑relaxation, optional Wegstein acceleration).
 - **Nodes**: Building blocks created from Python functions
 - **Ports**: Inputs and outputs of nodes that render controls
 
@@ -113,8 +114,10 @@ Flowfunc is a Plotly Dash component that provides a node editor interface based 
    - Update the `models.py` file if you need to add new data structures
 
 2. **Enhance JobRunner**:
-   - Modify `jobrunner.py` to add new execution modes or optimizations
-   - For distributed computing features, update `distributed.py`
+   - `jobrunner.py` handles execution modes and cycle solving. For cycles, Tarjan SCC detection builds a condensation DAG; cyclic components are solved with a fixed‑point solver.
+   - Solvers: Jacobi iteration with under‑relaxation (`scc_relaxation`), or Wegstein acceleration. Wegstein activates from the second iteration and clamps with `scc_wegstein_qmin`/`scc_wegstein_qmax` (defaults 0.0/2.0).
+   - Diagnostics: on non‑convergence, errors include `iters`, `max_delta`, and worst ports; if non‑numeric internals block convergence, the error identifies ports and suggests `scc_initial`.
+   - Distributed modes currently gate cyclic graphs and raise `QueueError` if a cycle is detected.
 
 3. **Add custom types**:
    - Define new types in `types.py`
@@ -141,10 +144,10 @@ Flowfunc is a Plotly Dash component that provides a node editor interface based 
    python examples/usage.py
    ```
 
-2. **Create your own test scripts**:
-   - Create a new Python file in the examples directory
-   - Import your modified flowfunc components
-   - Test your new features
+2. **Run unit tests**:
+   - `pytest -q`
+   - Distributed tests (Redis required): `pytest -k distributed -vv`
+   - Cycle solver tests: `pytest -k "cycles or scc_adv or scc_publish" -q`
 
 ## Common Workflows
 
@@ -181,7 +184,8 @@ Note: `setup.py install` is deprecated. Prefer `python -m build` and `pip instal
 - **Module not found errors**: Ensure your virtual environment is activated and the package is installed in development mode
 - **JavaScript build errors**: Check Node.js and npm versions, and ensure all dependencies are installed
 - **UI rendering issues**: Check browser console for React errors
-- **Missing dash-generate-components**: This tool might not be available in newer versions, focus on building the JavaScript components manually with `npm run build:js`
+- **Missing dash-generate-components**: This tool might not be available in newer versions, focus on building the JavaScript components manually with `npm run build`
+- **Distributed tests failing**: Ensure Redis is running and that `return_value` compatibility is handled (Flowfunc calls it if callable, otherwise falls back to `job.result`).
 - **Windows patch-package issues**: If `patch-package` fails to parse patches on Windows, use `npm run patch:flume` instead of a postinstall hook. It’s idempotent and cross‑platform.
 
 ## Contributing

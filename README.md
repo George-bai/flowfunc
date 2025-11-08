@@ -10,6 +10,7 @@ Flowfunc is a Dash component that brings a node-based programming surface to Pyt
 - **Python-native node definitions** generated from function signatures, docstrings and annotations, including support for `Annotated` metadata, enums, dataclasses, Pydantic models, optional/union types and multi-output functions.【F:flowfunc/config.py†L70-L214】【F:tests/test_config.py†L31-L94】
 - **Extensible graph schema** via `Node`, `Port`, `PortFunction` and extra port definitions, allowing bespoke controls or clientside JavaScript to shape dynamic ports (e.g. column selectors driven by editor context).【F:flowfunc/models.py†L46-L139】【F:examples/dynamic.py†L18-L96】【F:examples/assets/funcs.js†L1-L52】
 - **Flexible execution engine** powered by `JobRunner` with synchronous, asynchronous, distributed and hybrid modes, partial re-execution, structured node status reporting and graceful error propagation.【F:flowfunc/jobrunner.py†L102-L348】【F:flowfunc/jobrunner.py†L349-L637】
+- **Recycle stream (cycles) support** via strongly connected components (SCC) and a fixed‑point solver (Jacobi with optional under‑relaxation) in sync/async modes. Enable with `enable_cycles=True`. Cyclic graphs are currently gated in distributed mode.【F:flowfunc/jobrunner.py†L821-L851】【F:flowfunc/jobrunner.py†L1047-L1075】
 - **Distributed & cached runs** backed by `python-rq` and Redis. Jobs can be enqueued with custom queues/metadata, cancelled mid-flight, and short-circuited when cached results are valid across runs.【F:flowfunc/jobrunner.py†L26-L204】【F:flowfunc/jobrunner.py†L449-L637】【F:flowfunc/cache.py†L1-L140】
 - **Ready-to-run examples** showcasing synchronous flows, Redis-backed caching, dynamic nodes and RQ workers for distributed execution in the `examples/` folder.【F:examples/usage.py†L1-L215】【F:examples/usage_rq.py†L1-L120】【F:examples/README.md†L1-L34】
 
@@ -105,9 +106,89 @@ Every callback run returns a dictionary of `OutNode` instances with `result`, `r
 
 Enable caching by passing `cache_enabled=True`, a Redis URL, session identifier and TTL. Flowfunc hashes each node using its literal controls, upstream signatures and the function source so results are reused when nothing relevant changed.【F:flowfunc/jobrunner.py†L205-L282】【F:flowfunc/jobrunner.py†L406-L494】【F:flowfunc/cache.py†L72-L140】 Worker-side helpers short-circuit execution when a cached payload is available and automatically refresh cache entries after successful runs.【F:flowfunc/distributed.py†L83-L179】
 
+### Recycle streams (cycles)
+
+Flowfunc can execute graphs with feedback connections (downstream outputs feeding upstream inputs) by identifying strongly connected components (SCCs) and solving each cyclic component as a fixed‑point problem.
+
+- Enable with `enable_cycles=True` on `JobRunner` in `sync` or `async` modes.
+- Solver: Jacobi iteration with optional under‑relaxation, or Wegstein acceleration.
+- Parameters:
+  - `scc_max_iters` (default 50)
+  - `scc_tolerance` (default 1e-6) on max absolute difference of numeric ports
+  - `scc_relaxation` (default 1.0). Set <1.0 to improve stability
+  - `scc_initial` (dict `{node_id: {port_name: initial_value}}`) for initial guesses on internal edges
+  - `scc_solver` = `"jacobi"` (default) or `"wegstein"` (activates from the second iteration; first iteration uses simple relaxation)
+  - `scc_wegstein_qmin` (default 0.0), `scc_wegstein_qmax` (default 2.0) to clamp Wegstein mixing factor
+  - `scc_rtol`, `scc_atol` (optional) to use relative/absolute tolerances for numeric/array‑like streams
+  - `scc_port_tolerance`, `scc_type_tolerance` to override tolerance for a specific port or Python type
+  - `scc_edge_tolerance` to set a shared tolerance per connection: `{(src_type, src_port, dst_type, dst_input): tol}`
+  - `scc_df_numeric_as_array=True` to treat DataFrames with all‑numeric columns as arrays (vector delta + linear mixing + Wegstein)
+  - `scc_df_align` in `{"strict","allow_reindex"}` to control how numeric DataFrames are aligned before comparison/mixing
+- Caching inside cyclic components is “final-only” and excludes internal edges from signatures.
+- Non‑numeric outputs use equality for convergence; provide explicit `scc_initial` values if needed.
+
+Minimal example (self‑loop):
+
+```python
+from flowfunc.config import Config
+from flowfunc.jobrunner import JobRunner
+
+def recycle_affine(x: float, a: float, c: float) -> float:
+    return a*x + c
+
+nodes = {
+    "A": {
+        "id": "A",
+        "x": 0, "y": 0, "type": "__main__.recycle_affine", "width": 200,
+        "connections": {
+            "inputs": {"x": [{"nodeId": "A", "portName": "result"}]},
+            "outputs": {}
+        },
+        "inputData": {"a": {"a": 0.4}, "c": {"a": 1.0}}
+    }
+}
+
+config = Config.from_function_list([recycle_affine])
+runner = JobRunner(config, method="sync", enable_cycles=True, scc_tolerance=1e-8, scc_max_iters=100)
+res = runner.run(nodes)
+assert abs(res["A"].result - 1.0/(1.0-0.4)) < 1e-6
+```
+
+Configuring tolerances and numeric DataFrames
+
+```python
+from flowfunc.jobrunner import JobRunner
+
+runner = JobRunner(
+    config,
+    method="sync",
+    enable_cycles=True,
+    # Global absolute tolerance (plus optional relative terms)
+    scc_tolerance=1e-6,
+    scc_rtol=1e-6,
+    scc_atol=1e-9,
+    # Treat all‑numeric DataFrames as arrays; allow index/column alignment
+    scc_df_numeric_as_array=True,
+    scc_df_align="allow_reindex",
+    # Optional per‑edge override: (src_type, src_port, dst_type, dst_input) -> tol
+    scc_edge_tolerance={
+        ("mypkg.Upstream", "result", "mypkg.Downstream", "x"): 1e-7,
+    },
+)
+```
+
+- Notes:
+
+- Cyclic graphs are currently not supported in distributed modes and will raise a `QueueError` if detected.【F:flowfunc/jobrunner.py†L1047-L1075】
+- Only the first connection per input is used.
+- Cancel requests are honored between iterations.
+ - On non‑convergence, the solver raises a detailed error including iteration count, max_delta, and a sample of the worst‑changing ports. If non‑numeric internal ports prevent convergence, it will identify them and suggest providing `scc_initial` values.
+
 ## Distributed execution
 
 When `method` is `distributed` or `async_distributed`, Flowfunc enqueues nodes onto `python-rq` using the custom `NodeQueue`/`NodeJob` classes. Dependencies are resolved automatically, results are exposed through `job_id` metadata, and jobs inherit cache and cancellation settings.【F:flowfunc/distributed.py†L1-L134】【F:flowfunc/jobrunner.py†L507-L637】 Use the included CLI snippet from `examples/README.md` to start a worker with the correct queue and job classes.【F:examples/README.md†L18-L34】
+
+Note: Cyclic graphs are gated in distributed modes; use `sync`/`async` with `enable_cycles=True` instead.【F:flowfunc/jobrunner.py†L1047-L1075】
 
 ## Defining nodes and ports
 
@@ -147,5 +228,17 @@ This exposes `setStageTransform`, `setScale`, and `setTranslate` on the Flume `N
 - `examples/usage_rq.py` – runs the same graph in distributed mode with `rqworker` workers.【F:examples/usage_rq.py†L1-L120】
 - `examples/fit_to_view.py` – quick manual test of the new Fit‑to‑View toolbar button.
 - `examples/fit_to_view_trigger.py` – programmatic Fit‑to‑View via the `fit_to_view_request` prop.
+- `tests/test_cycles.py` – unit tests demonstrating self‑loop and two‑node recycle convergence.
 
 Launch the demo development server with `npm start` (after `npm install`) and rebuild the component bundle with `npm run build`. Python tests live in `tests/` and can be executed via `pytest` once dependencies from `requirements.txt` are installed.【F:AGENTS.md†L8-L20】【F:tests/test_jobrunner.py†L1-L97】
+
+## Testing
+
+- **Run all tests**
+  - `pytest -q`
+- **Run distributed tests** (requires a local Redis server)
+  - Ensure Redis is running on default port (localhost:6379)
+  - `pytest -k distributed -vv`
+- **Cycle solver tests**
+  - Fixed‑point solver correctness and publishing: `tests/test_cycles.py`, `tests/test_scc_publish.py`
+  - Advanced cases (cancel mid‑iteration, Wegstein clamping/activation, non‑numeric internals): `tests/test_scc_adv.py`

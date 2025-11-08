@@ -113,3 +113,32 @@ async def add_async_with_sleep(a: int, b: int) -> int:
 def divide_numbers(a: int, b: int) -> float:
     """Divide one number by another"""
     return a/b
+
+def recycle_affine(x: float, a: float, c: float) -> float:
+    return a * x + c
+
+def recycle_a(x: float, a: float, c: float) -> float:
+    return a * x + c
+
+def recycle_b(y: float, b: float, d: float) -> float:
+    return b * y + d
+
+# Regression helpers for SCC solver publishing
+def recycle_a_ext(x: float, a: float, c: float) -> Tuple[float, float]:
+    """Return both the primary recycle output and an external output.
+
+    result_0 = a*x + c (feeds the cycle)
+    result_1 = 2 * result_0 (feeds downstream, not part of the cycle)
+    """
+    y = a * x + c
+    return y, 2.0 * y
+
+def identity(e: float) -> float:
+    return e
+
+async def affine_async(x: float, a: float, c: float) -> float:
+    await asyncio.sleep(0.1)
+    return a * x + c
+
+def identity_str(e: str) -> str:
+    return e

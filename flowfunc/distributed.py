@@ -79,7 +79,21 @@ class NodeJob(Job):
         Creating an extra property which is a dictionary with keys equal to the
         output ports of the node.
         """
-        res = self.result
+        # Prefer return_value; supports both property and method forms; fallback to .result
+        res = None
+        try:
+            rv = getattr(self, "return_value")
+            if callable(rv):
+                try:
+                    res = rv()
+                except Exception:
+                    res = None
+            else:
+                res = rv
+        except Exception:
+            res = None
+        if res is None:
+            res = self.result
         if not isinstance(res, tuple):
             # If there is only one result item and has to be converted
             # to a tuple to map it onto a dict and later to kwargs
@@ -101,7 +115,21 @@ def _result_mapped_for_job(job: Job) -> dict:
         keys = None
     if not keys:
         keys = ["result"]
-    res = job.result
+    # Prefer return_value (supports property and method forms); fallback to .result
+    res = None
+    try:
+        rv = getattr(job, "return_value")
+        if callable(rv):
+            try:
+                res = rv()
+            except Exception:
+                res = None
+        else:
+            res = rv
+    except Exception:
+        res = None
+    if res is None:
+        res = job.result
     if not isinstance(res, tuple):
         res = (res,)
     return {k: v for k, v in zip(keys, res)}
