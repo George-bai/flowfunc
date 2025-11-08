@@ -32,6 +32,8 @@ class FlowfuncClass extends Component {
     this.container = this.props.containerRef || React.createRef();
     this.ukey = (new Date()).toISOString();
     this.localSelectedNodes = new Set();
+    this.state = { contextMenu: { visible: false, x: 0, y: 0, nodeId: null } };
+    this.nodeLabels = (this.props.node_labels || {});
     this.updateConfig();
   }
 
@@ -388,6 +390,7 @@ class FlowfuncClass extends Component {
   componentDidMount() {
     this.addEventListners(); // Adding on click event listners to nodes
     // console.log("Adding listeners")
+    this.applyNodeLabels();
   }
 
   componentDidUpdate(prevProps) {
@@ -417,6 +420,11 @@ class FlowfuncClass extends Component {
         typeof this.props.fit_to_view_request !== 'undefined') {
       this.fitToView();
     }
+    // Sync node labels from Dash if they changed
+    if (this.props.node_labels !== prevProps.node_labels && this.props.node_labels) {
+      this.nodeLabels = { ...this.props.node_labels };
+    }
+    this.applyNodeLabels();
   }
 
   setNodeStatus = (id, status) => {
@@ -474,11 +482,214 @@ class FlowfuncClass extends Component {
         const nodeDiv = e.target.closest('[class^=Node_wrapper]')
         if (nodeDiv) {
           var nodeId = nodeDiv.getAttribute('data-node-id');
-          comp.props.setProps({ double_clicked_node: nodeId });
+          const header = e.target.closest('h2');
+          if (header && nodeDiv.contains(header)) {
+            e.stopPropagation();
+            comp.openRenameEditorForNode(nodeId);
+          } else {
+            comp.props.setProps({ double_clicked_node: nodeId });
+          }
+        }
+      })
+      stage.addEventListener('contextmenu', function (e) {
+        const nodeDiv = e.target.closest('[class^=Node_wrapper]');
+        if (nodeDiv) {
+          // Let Flume open its own menu, then inject our items into it
+          comp._lastContextNodeId = nodeDiv.getAttribute('data-node-id');
+          setTimeout(() => comp.injectRenameItems(), 0);
         }
       })
       stage.setAttribute("data-event-click", "true");
     }
+  }
+
+  applyNodeLabels = () => {
+    try {
+      if (!this.container || !this.container.current) return;
+      const labels = this.nodeLabels || {};
+      for (const [nid, lbl] of Object.entries(labels)) {
+        if (!lbl) continue;
+        const nodeDiv = this.container.current.querySelector('[data-node-id="' + nid + '"]');
+        if (!nodeDiv) continue;
+        const header = nodeDiv.querySelector('h2');
+        if (header && header.textContent !== lbl) {
+          header.textContent = lbl;
+        }
+      }
+    } catch (e) {}
+  }
+
+  dismissContextMenus = () => {
+    try {
+      const sels = [
+        '[data-flume-component="context-menu"]',
+        '[data-flume-component="menu"]',
+        'div[class*="ContextMenu"]',
+        'div[class*="Popover"]',
+        'div[class*="Menu"]'
+      ];
+      for (const s of sels) {
+        const els = Array.from(document.querySelectorAll(s));
+        for (const el of els) {
+          try {
+            el.style.display = 'none';
+            el.setAttribute('aria-hidden', 'true');
+          } catch (e) {}
+        }
+      }
+      const stray = Array.from(document.querySelectorAll('div,span'));
+      for (const el of stray) {
+        const t = (el.textContent || '').trim();
+        if (t === 'Node Options') {
+          try {
+            el.style.display = 'none';
+            el.setAttribute('aria-hidden', 'true');
+          } catch (e) {}
+        }
+      }
+      // Remove any native tooltip sources
+      const titled = Array.from(document.querySelectorAll('[title]'));
+      for (const el of titled) {
+        const val = el.getAttribute('title');
+        if (val && val.trim() === 'Node Options') {
+          try { el.removeAttribute('title'); } catch (e) {}
+        }
+      }
+      const aria = Array.from(document.querySelectorAll('[aria-label]'));
+      for (const el of aria) {
+        const val = el.getAttribute('aria-label');
+        if (val && val.trim() === 'Node Options') {
+          try { el.removeAttribute('aria-label'); } catch (e) {}
+        }
+      }
+      // Nudge the browser tooltip to disappear
+      try { document.body.dispatchEvent(new MouseEvent('mousemove', {bubbles: true, clientX: 0, clientY: 0})); } catch (e) {}
+    } catch (e) {}
+  }
+
+  openRenameEditorForNode = (nodeId) => {
+    try {
+      try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); } catch (e) {}
+      this.dismissContextMenus();
+      const nodeDiv = this.container.current.querySelector('[data-node-id="' + nodeId + '"]');
+      if (!nodeDiv) return;
+      const header = nodeDiv.querySelector('h2');
+      if (!header) return;
+      const original = header.textContent || '';
+      const initial = this.nodeLabels[nodeId] || original || '';
+      header.setAttribute('contenteditable', 'true');
+      header.setAttribute('spellcheck', 'false');
+      header.textContent = initial;
+      header.focus();
+      // Select the full text and place the caret at the end
+      const range = document.createRange();
+      const node = header.firstChild || header;
+      try {
+        range.setStart(node, 0);
+        range.setEnd(node, (header.textContent || '').length);
+      } catch (err) {
+        try { range.selectNodeContents(header); } catch (e) {}
+      }
+      const sel = window.getSelection();
+      if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+      const commit = () => {
+        const newVal = (header.textContent || '').trim();
+        header.removeAttribute('contenteditable');
+        if (newVal && newVal !== original) {
+          this.nodeLabels[nodeId] = newVal;
+          this.applyNodeLabels();
+          try { this.props.setProps && this.props.setProps({ node_labels: { ...this.nodeLabels } }); } catch (e) {}
+        } else {
+          header.textContent = original;
+        }
+        header.removeEventListener('blur', onBlur);
+        header.removeEventListener('keydown', onKey);
+      };
+      const cancel = () => {
+        header.removeAttribute('contenteditable');
+        header.textContent = original;
+        header.removeEventListener('blur', onBlur);
+        header.removeEventListener('keydown', onKey);
+      };
+      const onBlur = () => commit();
+      const onKey = (ev) => {
+        if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+        if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+      };
+      header.addEventListener('blur', onBlur);
+      header.addEventListener('keydown', onKey);
+    } catch (e) {}
+  }
+
+  injectRenameItems = () => {
+    try {
+      // Try to find Flume's context menu container
+      let menu = document.querySelector('[data-flume-component="context-menu"]');
+      if (!menu) {
+        const candidates = Array.from(document.querySelectorAll('div[class*="ContextMenu"], [data-flume-component="menu"], [data-flume-component="contextmenu"]'));
+        if (candidates.length) menu = candidates[candidates.length - 1];
+      }
+      if (!menu) return;
+
+      // Determine the list container and sample item class
+      let list = menu.querySelector('ul') || menu;
+      const sample = list.firstElementChild;
+      const itemTag = (list.tagName || '').toLowerCase() === 'ul' ? 'li' : 'div';
+
+      // Try to detect the description styling from the built-in Delete item
+      let descProto = null;
+      try {
+        for (const child of Array.from(list.children)) {
+          const t = (child.textContent || '').toLowerCase();
+          if (t.includes('delete node')) {
+            const cand = Array.from(child.querySelectorAll('*')).find(el => /deletes\s+a\s+node/i.test(el.textContent || ''));
+            if (cand) { descProto = cand; break; }
+          }
+        }
+      } catch (e) {}
+
+      const ensureItem = (key, label, handler, descText) => {
+        if (list.querySelector('[data-ff-action="' + key + '"]')) return;
+        const el = document.createElement(itemTag);
+        if (sample && sample.className) el.className = sample.className;
+        el.setAttribute('data-ff-action', key);
+        el.style.cursor = 'pointer';
+        if (!el.textContent) el.textContent = label;
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          try { ev.preventDefault(); } catch (e) {}
+          try { if (menu && menu.style) menu.style.display = 'none'; } catch (e) {}
+          try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); } catch (e) {}
+          this.dismissContextMenus();
+          setTimeout(() => this.dismissContextMenus(), 0);
+          setTimeout(() => this.dismissContextMenus(), 50);
+          const nid = this._lastContextNodeId;
+          handler(nid);
+        });
+        // Insert at top to make it visible immediately
+        if (list.firstChild) list.insertBefore(el, list.firstChild); else list.appendChild(el);
+
+        // Add description (clone style from Delete Node item if possible)
+        if (descText) {
+          let descEl;
+          if (descProto) {
+            descEl = document.createElement(descProto.tagName || 'div');
+            if (descProto.className) descEl.className = descProto.className;
+          } else {
+            descEl = document.createElement('div');
+            descEl.style.opacity = '0.7';
+            descEl.style.fontSize = '12px';
+            descEl.style.marginTop = '2px';
+          }
+          descEl.textContent = descText;
+          el.appendChild(descEl);
+        }
+      };
+
+      ensureItem('rename-node', 'Rename node', (nid) => {
+        if (nid) setTimeout(() => this.openRenameEditorForNode(nid), 0);
+      }, 'Renames the node\'s display label.');
+    } catch (e) {}
   }
 
 
@@ -699,6 +910,11 @@ FlowfuncClass.propTypes = {
    * The available port types and node types
    */
   config: PropTypes.object,
+
+  /**
+   * Mapping of nodeId -> display label
+   */
+  node_labels: PropTypes.object,
 
   /**
    * Dash-assigned callback that should be called to report property changes
