@@ -1,5 +1,5 @@
 import time
-import flowfunc
+from flowfunc.Flowfunc import Flowfunc
 from flowfunc.config import Config
 from flowfunc.jobrunner import JobRunner
 from flowfunc.models import Node, Port, PortFunction
@@ -30,6 +30,87 @@ increasing_ports_function = PortFunction(path="increasing_ports")
 dynamic_port_function = PortFunction(path="dynamic_ports")
 # "dynamic_ports" should be defined in /assets/*.js at the
 # path window.dash_clientside.flowfunc.dynamic_ports
+ 
+
+def split_csv_outputs(csv: str):
+    parts = (csv or "").split(",")
+    return {f"item_{i}": p.strip() for i, p in enumerate(parts)}
+
+
+dynamic_outputs_function = PortFunction(path="dynamic_outputs.split_csv_outputs")
+
+
+def splitter(value, n_outputs, ratios):
+    """Split a value into N parts based on ratios.
+
+    Behaviour:
+    - n_outputs in [0, 50].
+    - If no ratios are provided, the value is split equally across outputs.
+    - If exactly n-1 ratios are provided, the last ratio is auto-computed as
+      1 - sum(ratios), as long as the sum is <= 1.
+    - If exactly n ratios are provided, they are used directly as long as
+      they are non-negative and sum <= 1.
+    - Otherwise a ValueError is raised.
+    """
+
+    n = int(n_outputs or 0)
+    if n < 0 or n > 50:
+        raise ValueError("Number of outputs must be between 0 and 50.")
+    if n == 0:
+        return {}
+
+    # Parse ratios into a list of floats
+    ratio_vals: list[float] = []
+    if isinstance(ratios, str):
+        text = ratios.strip()
+        if text:
+            for part in text.split(","):
+                if not part.strip():
+                    continue
+                ratio_vals.append(float(part.strip()))
+    else:
+        try:
+            for x in ratios:
+                if x is None:
+                    continue
+                ratio_vals.append(float(x))
+        except TypeError:
+            ratio_vals = []
+
+    if any(r < 0 for r in ratio_vals):
+        raise ValueError("Ratios must be non-negative.")
+
+    ratios_full: list[float]
+    if not ratio_vals:
+        # Equal split if no ratios provided
+        ratios_full = [1.0 / n] * n
+    elif len(ratio_vals) == n - 1:
+        ratio_sum = sum(ratio_vals)
+        if ratio_sum > 1:
+            raise ValueError("Sum of ratios cannot exceed 1.")
+        last_ratio = 1.0 - ratio_sum
+        ratios_full = list(ratio_vals) + [last_ratio]
+    elif len(ratio_vals) == n:
+        ratio_sum = sum(ratio_vals)
+        if ratio_sum > 1:
+            raise ValueError("Sum of ratios cannot exceed 1.")
+        ratios_full = list(ratio_vals)
+    else:
+        raise ValueError(
+            f"Expected {n - 1} or {n} ratios for {n} outputs (got {len(ratio_vals)})."
+        )
+
+    if value is None:
+        raise ValueError("Splitter node requires a value input.")
+    value_float = float(value)
+
+    result = {}
+    for idx, r in enumerate(ratios_full):
+        result[f"part_{idx}"] = value_float * r
+    return result
+
+
+splitter_outputs_function = PortFunction(path="dynamic_outputs.splitter_outputs")
 
 
 template_node = Node(
@@ -51,10 +132,34 @@ list_node = Node(
 )
 
 
+split_outputs_node = Node(
+    type="dynamic_outputs.split_csv",
+    label="Dynamic Outputs (Split CSV)",
+    description="Split a CSV string into multiple dynamic output ports.",
+    method=split_csv_outputs,
+    inputs=[Port(type="str", name="csv", label="CSV")],
+    outputs=dynamic_outputs_function,
+)
+
+
+splitter_node = Node(
+    type="dynamic_outputs.splitter",
+    label="Splitter",
+    description="Split a value into N outputs according to ratios.",
+    method=splitter,
+    inputs=[
+        Port(type="float", name="value", label="Value"),
+        Port(type="int", name="n_outputs", label="Outputs (0-50)"),
+        Port(type="str", name="ratios", label="Ratios (comma-separated)"),
+    ],
+    outputs=splitter_outputs_function,
+)
+
+
 app = dash.Dash(external_stylesheets=[dbc.themes.SLATE])
 
 fconfig = Config.from_function_list(
-    all_functions, extra_nodes=[template_node, list_node]
+    all_functions, extra_nodes=[template_node, list_node, split_outputs_node, splitter_node]
 )
 # fconfig = Config.from_function_list(all_functions)
 job_runner = JobRunner(fconfig)
@@ -80,7 +185,7 @@ node_editor = html.Div(
         ),
         html.Div(
             id="nodeeditor_container",
-            children=flowfunc.Flowfunc(
+            children=Flowfunc(
                 id="input",
                 # config=inconfig,
                 config=fconfig.dict(),
@@ -184,4 +289,4 @@ def update_output(contents, nclicks, nodes):
 
 
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run(debug=True)

@@ -31,29 +31,34 @@ export const usePortHighlighter = (config, nodes, typeSafety, editorRef) => {
 
   // Find closest compatible port
   const findClosestPort = (mouseX, mouseY) => {
-    if (!editorRef.current || !isDraggingRef.current) return null;
-    
+    if (!editorRef.current || !isDraggingRef.current || !draggedPortRef.current) return null;
+
     const ports = editorRef.current.querySelectorAll('[data-port-name][data-port-transput-type]');
     let closest = null;
     let minDistance = 72; // 3 * 24px port diameter
-    
+
     ports.forEach(port => {
+      // Avoid suggesting the exact same port we started dragging from
+      if (draggedPortRef.current.element && port === draggedPortRef.current.element) {
+        return;
+      }
+
       const rect = port.getBoundingClientRect();
       const centerX = rect.left + rect.width / 2;
       const centerY = rect.top + rect.height / 2;
       const distance = Math.sqrt((mouseX - centerX) ** 2 + (mouseY - centerY) ** 2);
-      
+
       if (distance < minDistance) {
         const portType = port.getAttribute('data-port-type') || 'any';
         const isInput = port.getAttribute('data-port-transput-type') === 'input';
-        
+
         if (isCompatible(draggedPortRef.current.type, portType, draggedPortRef.current.isInput, isInput)) {
           minDistance = distance;
           closest = port;
         }
       }
     });
-    
+
     return closest;
   };
 
@@ -63,8 +68,9 @@ export const usePortHighlighter = (config, nodes, typeSafety, editorRef) => {
     const handleMouseDown = (e) => {
       const port = e.target.closest('[data-port-name][data-port-transput-type]');
       if (!port) return;
-      
+
       draggedPortRef.current = {
+        element: port,
         type: port.getAttribute('data-port-type') || 'any',
         isInput: port.getAttribute('data-port-transput-type') === 'input'
       };

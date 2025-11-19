@@ -8,7 +8,7 @@ Flowfunc is a Dash component that brings a node-based programming surface to Pyt
 
 - **Dash-first node editor** built on [Flume](https://flume.dev) with custom styling, live port highlighting and toolbar toggles for pan/zoom to keep complex graphs manageable inside Dash layouts. A new Fit‑to‑View action zooms and centers all nodes to the viewport for quick orientation.【F:src/lib/components/Flowfunc.react.js†L18-L210】【F:src/lib/components/nodeeditor.css†L1-L37】
 - **Python-native node definitions** generated from function signatures, docstrings and annotations, including support for `Annotated` metadata, enums, dataclasses, Pydantic models, optional/union types and multi-output functions.【F:flowfunc/config.py†L70-L214】【F:tests/test_config.py†L31-L94】
-- **Extensible graph schema** via `Node`, `Port`, `PortFunction` and extra port definitions, allowing bespoke controls or clientside JavaScript to shape dynamic ports (e.g. column selectors driven by editor context).【F:flowfunc/models.py†L46-L139】【F:examples/dynamic.py†L18-L96】【F:examples/assets/funcs.js†L1-L52】
+- **Extensible graph schema** via `Node`, `Port`, `PortFunction` and extra port definitions, allowing bespoke controls or clientside JavaScript to shape dynamic input and output ports (e.g. column selectors driven by editor context or value splitters with dynamic fan‑out).【F:flowfunc/models.py†L46-L139】【F:examples/dynamic.py†L18-L140】【F:examples/assets/funcs.js†L1-L74】
 - **Flexible execution engine** powered by `JobRunner` with synchronous, asynchronous, distributed and hybrid modes, partial re-execution, structured node status reporting and graceful error propagation.【F:flowfunc/jobrunner.py†L102-L348】【F:flowfunc/jobrunner.py†L349-L637】
 - **Recycle stream (cycles) support** via strongly connected components (SCC) and a fixed‑point solver (Jacobi with optional under‑relaxation) in sync/async modes. Enable with `enable_cycles=True`. Cyclic graphs are currently gated in distributed mode.【F:flowfunc/jobrunner.py†L821-L851】【F:flowfunc/jobrunner.py†L1047-L1075】
 - **Distributed & cached runs** backed by `python-rq` and Redis. Jobs can be enqueued with custom queues/metadata, cancelled mid-flight, and short-circuited when cached results are valid across runs.【F:flowfunc/jobrunner.py†L26-L204】【F:flowfunc/jobrunner.py†L449-L637】【F:flowfunc/cache.py†L1-L140】
@@ -195,6 +195,7 @@ Note: Cyclic graphs are gated in distributed modes; use `sync`/`async` with `ena
 - **Automatic generation** – `Config.from_function_list()` inspects each callable’s signature, docstring and annotations to create `Node`/`Port` models and default controls.【F:flowfunc/config.py†L69-L214】 Docstrings seed node descriptions and return annotations define the number and type of outputs.【F:flowfunc/config.py†L147-L194】
 - **Rich types** – enums become dropdowns, optional/union types expand accepted connections, dataclasses and Pydantic models generate nested controls, and multi-value returns create multiple output ports.【F:flowfunc/config.py†L200-L294】【F:tests/test_config.py†L45-L94】 The `typing.Annotated` metadata lets you override labels, defaults and port visibility without leaving Python.【F:usage.py†L11-L70】
 - **Custom nodes** – instantiate `Node`, `Port` and `PortFunction` manually to introduce bespoke behaviours (e.g. dynamic display nodes or incremental port lists). Client-side helpers can live in Dash’s `assets/` directory and receive editor context to render dynamic controls.【F:examples/dynamic.py†L18-L123】【F:examples/assets/funcs.js†L1-L52】 You can also extend the config with `extra_ports` to expose additional control widgets or composite inputs.【F:examples/usage.py†L85-L111】
+  - For dynamic outputs, set `Node.outputs` to a `PortFunction` whose clientside implementation returns an array of ports, and have the Python node method return a `dict` mapping those dynamic output names to values so `result_mapped` stays consistent.【F:flowfunc/jobrunner.py†L654-L691】【F:examples/dynamic.py†L35-L84】
 
 ## Dash component API
 
@@ -224,7 +225,7 @@ This exposes `setStageTransform`, `setScale`, and `setTranslate` on the Flume `N
 ## Examples and demo apps
 
 - `examples/usage.py` – Dash app comparing synchronous vs asynchronous runners with Redis caching, plus context-driven column selectors.【F:examples/usage.py†L1-L215】
-- `examples/dynamic.py` – demonstrates dynamic port generation and serialization helpers.【F:examples/dynamic.py†L18-L181】
+- `examples/dynamic.py` – demonstrates dynamic port generation (dynamic inputs and dynamic outputs), including template-driven ports, a CSV splitter, and a numeric `Splitter` node that fans a value out into multiple dynamic outputs based on user-defined ratios.【F:examples/dynamic.py†L18-L140】【F:examples/assets/funcs.js†L1-L74】
 - `examples/usage_rq.py` – runs the same graph in distributed mode with `rqworker` workers.【F:examples/usage_rq.py†L1-L120】
 - `examples/fit_to_view.py` – quick manual test of the new Fit‑to‑View toolbar button.
 - `examples/fit_to_view_trigger.py` – programmatic Fit‑to‑View via the `fit_to_view_request` prop.

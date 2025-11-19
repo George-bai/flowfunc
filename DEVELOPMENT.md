@@ -17,7 +17,7 @@ Flowfunc is a Plotly Dash component that provides a node editor interface based 
 - **Config**: Manages nodes and ports available in the editor
 - **JobRunner**: Processes the node editor output (sync, async, distributed). Detects SCCs for cycles and solves cyclic components via fixed‑point iteration (Jacobi + under‑relaxation, optional Wegstein acceleration).
 - **Nodes**: Building blocks created from Python functions
-- **Ports**: Inputs and outputs of nodes that render controls
+- **Ports**: Inputs and outputs of nodes that render controls, including dynamic ports defined via `PortFunction` and clientside JavaScript.
 
 ## Development Environment Setup
 
@@ -122,6 +122,12 @@ Flowfunc is a Plotly Dash component that provides a node editor interface based 
 3. **Add custom types**:
    - Define new types in `types.py`
    - Update port handling in `config.py` to use these types
+
+4. **Dynamic ports (inputs & outputs)**:
+   - `Node.inputs` and `Node.outputs` can be a `PortFunction` instead of a list of `Port` models.
+   - For dynamic inputs/outputs, the clientside function receives `(ports, inputData, connections, context, Controls)` and must return an array of ports.
+   - For nodes with dynamic outputs, the corresponding Python method should return a `dict` mapping dynamic output names (as defined in the clientside function) to values so that `JobRunner` can build `result_mapped` correctly.
+   - `Config.from_function_list` includes both auto-generated nodes and `extra_nodes` when deriving `portTypes`, so extra nodes that introduce new port types are fully registered in the editor.
 
 ### Frontend (React/JavaScript)
 

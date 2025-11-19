@@ -287,10 +287,27 @@ class FlowfuncClass extends Component {
         }
       }
       if (!R.isNil(outputs) && !R.isEmpty(outputs)) {
-        node_obj.outputs = (ports) => outputs.map(output => {
-          const { type, controls, ...output_data } = output;
-          return ports[type](output_data);
-        })
+        if (R.hasIn("source", outputs)) {
+          const func = new Function(outputs.source);
+          node_obj.outputs = (ports) => (inputData, connections, context) => {
+            return func(ports, inputData, connections, context, Controls);
+          }
+        }
+        else if (R.hasIn("path", outputs)) {
+          node_obj.outputs = (ports) => (inputData, connections, context) => {
+            const func = (window.dash_clientside && window.dash_clientside.flowfunc && window.dash_clientside.flowfunc[outputs.path]);
+            if (!func) {
+              return [];
+            }
+            return func(ports, inputData, connections, context, Controls);
+          }
+        }
+        else {
+          node_obj.outputs = (ports) => outputs.map(output => {
+            const { type, controls, ...output_data } = output;
+            return ports[type](output_data);
+          })
+        }
       }
       if (!R.isNil(category) && !R.isEmpty(category)) {
         node_obj.label = `${category}: ${label}`;
@@ -710,6 +727,7 @@ class FlowfuncClass extends Component {
             disablePan={this.props.disable_pan}
             disableFocus={this.props.disable_focus}
             spaceToPan={this.props.space_to_pan}
+            circularBehavior="allow"
             onChange={this.handleChange}
             onCommentsChange={this.handleChange}
             key={this.ukey}

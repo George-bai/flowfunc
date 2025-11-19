@@ -44,6 +44,22 @@ scheduled tasks (using the scheduler feature of python-rq), retries, etc.
 
 I am hoping to add more examples later.
 
+## Dynamic nodes (dynamic.py)
+
+`examples/dynamic.py` shows how to use `PortFunction` and clientside JavaScript to build dynamic nodes:
+
+- Dynamic inputs driven by a template string or connection context.
+- Dynamic outputs driven by user input, including:
+  - A CSV splitter that exposes one output per parsed token.
+  - A `Splitter` node that takes a value, a requested number of outputs and a set of ratios, then creates that many outputs and maps each output to a share of the value.
+
+To run:
+
+```bash
+cd examples
+python dynamic.py
+```
+
 ## Fit-to-View tests
 
 Two small apps exercise the new Fit‑to‑View feature in the editor:

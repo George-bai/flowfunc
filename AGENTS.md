@@ -41,4 +41,14 @@
 - Non‑convergence errors include iteration count, max delta, and a sample of worst ports; for non‑numeric internals, provide `scc_initial`.
  - Tolerances: `scc_tolerance` (global), optional `scc_rtol/scc_atol` for numeric/array‑like streams; overrides via `scc_port_tolerance`, `scc_type_tolerance`, and per‑edge `scc_edge_tolerance`.
  - DataFrames: when all columns are numeric and `scc_df_numeric_as_array=True`, they are treated as arrays (vector delta + linear mixing + Wegstein); `scc_df_align` controls strict vs reindex alignment.
+ - The React editor configures Flume's `NodeEditor` with `circularBehavior="allow"`. Do **not** re‑enable Flume‑side prevention/warnings for cycles; rely on `JobRunner`'s SCC detection and `enable_cycles` flag to gate cyclic graphs.
 
+## Dynamic Ports (Inputs & Outputs)
+
+- `Node.inputs` and `Node.outputs` may be a `PortFunction` instead of a list of `Port` objects.
+- The React side expects dynamic port functions with the signature `ports => (inputData, connections, context) => []`, implemented in Dash `assets/` as `window.dash_clientside.flowfunc[<path>]`.
+- When `Node.outputs` is dynamic, the Python node method must return a mapping from dynamic port names to values so `JobRunner` can populate `result_mapped` and downstream nodes can read from the correct keys.
+- When adding new examples or features, keep dynamic input and output behaviour in sync between `Flowfunc.react.js`, `flowfunc/jobrunner.py` and the examples in `examples/`.
+ - `JobRunner`'s `_call_node_method_async` is the single source of truth for mapping method return values to `result_mapped` for both static and dynamic outputs (and for cache hits via `evaluate_node_async`). Avoid re‑implementing output‑mapping logic elsewhere.
+ - The `Splitter` example (`examples/dynamic.py` + `examples/assets/funcs.js`) is the reference pattern for dynamic outputs with validation and auto‑computed labels. Keep the backend ratio rules and the clientside label helper strictly in sync.
+ - The `utils.toolnodes.display` node uses an embedded dynamic‑inputs implementation inside `Flowfunc.react.js` (see `createDisplayNodePorts` and the compacting logic in `handleChange`). When changing display behaviour, update both the port‑creation and connection‑remapping paths together.
