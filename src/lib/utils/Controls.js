@@ -1,5 +1,5 @@
 import React from 'react'
-import { Colors, Controls } from 'flume'
+import { Controls } from 'flume'
 
 const generateControl = (itype) => {
     return (props) => {
@@ -8,12 +8,12 @@ const generateControl = (itype) => {
             {
                 name: name,
                 label: label,
-                render: (data, onChange, context, redraw, portProps, inputData) => {
+                render: (data, onChange, context, redraw, portProps, _inputData) => {
                     return (
                         <>
                             <label data-flume-component="control-label" className="Control_controlLabel__3ga2-">{portProps.label}</label>
                             <div className="TextInput_wrapper__tefOZ" data-flume-component="text-input">
-                                <input type={itype} data-flume-component={`text-input-$(itype)`} className="TextInput_input__1QHwS" defaultValue={data} onChange={(e) => onChange(e.target.value)} {...others} />
+                                <input type={itype} data-flume-component={`text-input-${itype}`} className="TextInput_input__1QHwS" defaultValue={data} onChange={(e) => onChange(e.target.value)} {...others} />
                             </div>
                         </>
                     )
@@ -28,7 +28,7 @@ const objectControl = (props) => {
         {
             name: props.name,
             label: props.label,
-            render: (data, onChange, context, redraw, portProps, inputData) => {
+            render: (data, onChange, context, redraw, portProps, _inputData) => {
                 return (
                     <label data-flume-component="control-label" className="Control_controlLabel__3ga2-">{portProps.label}</label>
                 )
@@ -39,7 +39,8 @@ const objectControl = (props) => {
 
 const standardControls = {
     number: Controls.number,
-    int: Controls.number,  // Back to standard number control
+    // Back to standard number control
+    int: Controls.number,
     float: Controls.number,
     text: Controls.text,
     str: Controls.text,
@@ -47,6 +48,7 @@ const standardControls = {
     bool: Controls.checkbox,
     select: Controls.select,
     multiselect: Controls.multiselect,
+    object: objectControl,
     color: generateControl("color"),
     date: generateControl("date"),
     time: generateControl("time"),

@@ -1,11 +1,20 @@
 import React, { Component } from 'react';
 import * as R from 'ramda'
-import { NodeEditor } from 'flume';
-import { FlumeConfig, Colors, Controls } from 'flume'
-import PropTypes, { string } from 'prop-types';
+import { NodeEditor, FlumeConfig, Colors, Controls } from 'flume'
+import PropTypes from 'prop-types';
 import { standardControls } from '../utils/Controls';
 import { usePortHighlighter } from '../hooks/usePortHighlighter';
 import "./nodeeditor.css"
+
+const RANDOM_KEY_RADIX = 36;
+const RANDOM_KEY_SUBSTRING_START = 7;
+const DISMISS_CONTEXT_MENU_DELAY_MS = 50;
+const FIT_TO_VIEW_MIN_SCALE = 0.1;
+const FIT_TO_VIEW_MAX_SCALE = 7;
+const FIT_TO_VIEW_EPSILON = 1e-3;
+const FIT_TO_VIEW_STEP = 0.05;
+const FIT_TO_VIEW_DENOM_EPSILON = 1e-6;
+const FIT_TO_VIEW_WHEEL_SENSITIVITY = 0.005;
 
 /**
  * Flowfunc: A node editor for dash
@@ -34,31 +43,43 @@ class FlowfuncClass extends Component {
     this.localSelectedNodes = new Set();
     this.state = { contextMenu: { visible: false, x: 0, y: 0, nodeId: null } };
     this.nodeLabels = (this.props.node_labels || {});
+    this.fitToView = this.fitToView.bind(this);
+    this.handleChange = this.handleChange.bind(this);
     this.updateConfig();
   }
 
   // Compute and apply a transform that fits all nodes in view
-  fitToView = () => {
+  fitToView() {
     try {
       const container = this.container && this.container.current;
-      if (!container) return;
+      if (!container) {
+        return;
+      }
       const stage = container.querySelector('[data-flume-stage="true"], [data-flume-component="stage"]');
-      if (!stage) return;
+      if (!stage) {
+        return;
+      }
 
       // Collect all node rects
       const nodeEls = container.querySelectorAll('[data-flume-component="node"]');
-      if (!nodeEls || nodeEls.length === 0) return;
+      if (!nodeEls || nodeEls.length === 0) {
+        return;
+      }
 
       // Stage viewport rect
       const rect = stage.getBoundingClientRect();
-      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      if (!rect || rect.width <= 0 || rect.height <= 0) {
+        return;
+      }
 
       // Get current scale and translate from inline transforms
       const translateWrapper = stage.children && stage.children[0];
       const scaleWrapper = translateWrapper && translateWrapper.children && translateWrapper.children[0];
 
       const parseScale = (el) => {
-        if (!el) return 1;
+        if (!el) {
+          return 1;
+        }
         const t = el.style && el.style.transform ? el.style.transform : '';
         const m = t.match(/scale\(([^)]+)\)/);
         const s = m ? parseFloat(m[1]) : 1;
@@ -66,7 +87,9 @@ class FlowfuncClass extends Component {
       };
 
       const parseTranslate = (el) => {
-        if (!el) return { x: 0, y: 0 };
+        if (!el) {
+          return { x: 0, y: 0 };
+        }
         const t = el.style && el.style.transform ? el.style.transform : '';
         const m = t.match(/translate\(([-0-9.]+)px,\s*([-0-9.]+)px\)/);
         if (m) {
@@ -90,15 +113,18 @@ class FlowfuncClass extends Component {
         top = Math.min(top, r.top);
         bottom = Math.max(bottom, r.bottom);
       });
-      if (!isFinite(left) || !isFinite(right) || !isFinite(top) || !isFinite(bottom)) return;
+      if (!isFinite(left) || !isFinite(right) || !isFinite(top) || !isFinite(bottom)) {
+        return;
+      }
 
-      let bboxW = Math.max(1, right - left);
-      let bboxH = Math.max(1, bottom - top);
+      const bboxW = Math.max(1, right - left);
+      const bboxH = Math.max(1, bottom - top);
 
-      const margin = 40; // pixels
+      // pixels
+      const margin = 40;
       const targetScaleByW = s0 * ((rect.width - 2 * margin) / bboxW);
       const targetScaleByH = s0 * ((rect.height - 2 * margin) / bboxH);
-      let sTarget = Math.max(0.1, Math.min(7, Math.min(targetScaleByW, targetScaleByH)));
+      const sTarget = Math.max(FIT_TO_VIEW_MIN_SCALE, Math.min(FIT_TO_VIEW_MAX_SCALE, Math.min(targetScaleByW, targetScaleByH)));
 
       // Center in world-space and compute target translate
       const cx = (left + right) / 2;
@@ -115,22 +141,30 @@ class FlowfuncClass extends Component {
       }
 
       // Fallback: animate with wheel events if zoom is enabled
-      if (this.props.disable_zoom) return; // cannot animate without wheel handler
+      // cannot animate without wheel handler
+      if (this.props.disable_zoom) {
+        return;
+      }
 
       const animateStep = () => {
         const s = animateStep._s;
         const T = animateStep._T;
-        if (Math.abs(sTarget - s) < 1e-3) return;
+        if (Math.abs(sTarget - s) < FIT_TO_VIEW_EPSILON) {
+          return;
+        }
         const dir = sTarget > s ? 1 : -1;
-        const sNext = dir > 0 ? Math.min(s + 0.05, sTarget) : Math.max(s - 0.05, sTarget);
+        const sNext = dir > 0 ? Math.min(s + FIT_TO_VIEW_STEP, sTarget) : Math.max(s - FIT_TO_VIEW_STEP, sTarget);
         const ratio = sNext / s;
         const denom = ratio - 1;
-        if (Math.abs(denom) < 1e-6) return;
+        if (Math.abs(denom) < FIT_TO_VIEW_DENOM_EPSILON) {
+          return;
+        }
         const alphaX = (TTarget.x - T.x) / denom - T.x;
         const alphaY = (TTarget.y - T.y) / denom - T.y;
         const clientX = rect.x + rect.width / 2 + alphaX;
         const clientY = rect.y + rect.height / 2 + alphaY;
-        const deltaY = (s - sNext) / 0.005; // will be within [-10, 10]
+        // will be within [-10, 10]
+        const deltaY = (s - sNext) / FIT_TO_VIEW_WHEEL_SENSITIVITY;
         const evt = new WheelEvent('wheel', {
           clientX,
           clientY,
@@ -152,7 +186,7 @@ class FlowfuncClass extends Component {
     }
   }
 
-  createDisplayNodePorts = (ports, inputData, connections, context) => {
+  createDisplayNodePorts(ports, inputData, connections, _context) {
     // Auto-expanding display node with compacting behavior
     const connected_ports = new Set();
     
@@ -211,7 +245,7 @@ class FlowfuncClass extends Component {
     return arr;
   }
 
-  updateConfig = () => {
+  updateConfig() {
     // Function to convert the python based config data to a FlumeConfig object
     const config = this.props.config;
     this.flconfig = new FlumeConfig();
@@ -235,26 +269,25 @@ class FlowfuncClass extends Component {
             name: port_obj.type,
             label: port_obj.label,
             defaultValue: null,
-            render: (data, onChange, context, redraw, portProps, inputData) => {
+            render: (data, onChange, context, redraw, portProps, _inputData) => {
               return <label data-flume-component="port-label" className="IoPorts_portLabel__qOE7y"> {portProps.inputLabel}</label>;
             }
           })
         ];
       }
       try {
-        //The standard ports are already added and hence will cause an error here
+        // The standard ports are already added and hence will cause an error here
         this.flconfig.addPortType(port_obj);
       } catch (e) {
+        void e;
       }
     }
     for (const node of config.nodeTypes) {
       const { inputs, outputs, label, category, ...node_obj } = node;
       if (!R.isNil(inputs) && !R.isEmpty(inputs)) {
         if (R.hasIn("source", inputs)) {
-          var func = new Function(inputs.source);
-          node_obj.inputs = ports => (inputData, connections, context) => {
-            return func(ports, inputData, connections, context, Controls)
-          }
+          console.error('PortFunction.source is not supported. Use PortFunction.path instead.');
+          node_obj.inputs = () => () => [];
         }
         else if (R.hasIn("path", inputs)) {
           try{
@@ -266,7 +299,7 @@ class FlowfuncClass extends Component {
               }
               
               // For other dynamic functions, try to find them in window
-              var func = (window.dash_clientside && window.dash_clientside.flowfunc && window.dash_clientside.flowfunc[inputs.path]);
+              const func = (window.dash_clientside && window.dash_clientside.flowfunc && window.dash_clientside.flowfunc[inputs.path]);
               if (!func) {
                 return [];
               }
@@ -276,25 +309,24 @@ class FlowfuncClass extends Component {
           }
           catch (e){
             // Handle errors silently
+            void e;
           }
         }
         else {
-          node_obj.inputs = (ports) => inputs.map(input => {
+          node_obj.inputs = ports => inputs.map(input => {
             const { type, controls, ...input_data } = input;
-            // console.log(input, type, controls, input_data);
+            void controls;
             return ports[type](input_data);
           })
         }
       }
       if (!R.isNil(outputs) && !R.isEmpty(outputs)) {
         if (R.hasIn("source", outputs)) {
-          const func = new Function(outputs.source);
-          node_obj.outputs = (ports) => (inputData, connections, context) => {
-            return func(ports, inputData, connections, context, Controls);
-          }
+          console.error('PortFunction.source is not supported. Use PortFunction.path instead.');
+          node_obj.outputs = () => () => [];
         }
         else if (R.hasIn("path", outputs)) {
-          node_obj.outputs = (ports) => (inputData, connections, context) => {
+          node_obj.outputs = ports => (inputData, connections, context) => {
             const func = (window.dash_clientside && window.dash_clientside.flowfunc && window.dash_clientside.flowfunc[outputs.path]);
             if (!func) {
               return [];
@@ -303,8 +335,9 @@ class FlowfuncClass extends Component {
           }
         }
         else {
-          node_obj.outputs = (ports) => outputs.map(output => {
+          node_obj.outputs = ports => outputs.map(output => {
             const { type, controls, ...output_data } = output;
+            void controls;
             return ports[type](output_data);
           })
         }
@@ -320,15 +353,15 @@ class FlowfuncClass extends Component {
     if (!this.props.type_safety) {
       // Use acceptTypes from the object port
       const allPortTypes = this.flconfig.portTypes.object.acceptTypes;
-      for (const [type, obj] of Object.entries(this.flconfig.portTypes)) {
+      for (const [, obj] of Object.entries(this.flconfig.portTypes)) {
         obj.acceptTypes = allPortTypes;
       }
     }
   }
 
-  handleChange = () => {
+  handleChange() {
     // Get current nodes before processing
-    let currentNodes = this.nodeEditor.current.getNodes();
+    const currentNodes = this.nodeEditor.current.getNodes();
     
     // Handle display node compacting if needed
     if (this.pendingDisplayCompacting) {
@@ -360,7 +393,7 @@ class FlowfuncClass extends Component {
           }
           
           // Also need to update all outgoing connections TO this display node
-          for (const [otherNodeId, otherNode] of Object.entries(currentNodes)) {
+          for (const [, otherNode] of Object.entries(currentNodes)) {
             if (otherNode.connections && otherNode.connections.outputs) {
               for (const [outputPort, outputConnections] of Object.entries(otherNode.connections.outputs)) {
                 if (Array.isArray(outputConnections)) {
@@ -405,7 +438,8 @@ class FlowfuncClass extends Component {
   }
 
   componentDidMount() {
-    this.addEventListners(); // Adding on click event listners to nodes
+    // Adding on click event listners to nodes
+    this.addEventListners();
     // console.log("Adding listeners")
     this.applyNodeLabels();
   }
@@ -416,7 +450,7 @@ class FlowfuncClass extends Component {
     }
     if (this.props.editor_status === "server") {
       // console.log("Pushing new nodes", this.props.nodes)
-      this.ukey = (Math.random() + 1).toString(36).substring(7);
+      this.ukey = (Math.random() + 1).toString(RANDOM_KEY_RADIX).substring(RANDOM_KEY_SUBSTRING_START);
     }
 
     
@@ -427,7 +461,7 @@ class FlowfuncClass extends Component {
         this.nodeEditor.current.setNodes(this.props.nodes);
       }
       // Generate new key to force React re-render
-      this.ukey = (Math.random() + 1).toString(36).substring(7);
+      this.ukey = (Math.random() + 1).toString(RANDOM_KEY_RADIX).substring(RANDOM_KEY_SUBSTRING_START);
     }
     
     this.setNodesStatus();
@@ -444,17 +478,18 @@ class FlowfuncClass extends Component {
     this.applyNodeLabels();
   }
 
-  setNodeStatus = (id, status) => {
+  setNodeStatus(id, status) {
+    // Removing any existing classes
     const nodeDiv = this.container.current.querySelector('[data-node-id="' + id + '"]');
     if (status) {
-      // Removing any existing classes
       const classes = ["started", "queued", "deferred", "finished", "canceled", "stopped", "scheduled", "failed"];
       nodeDiv.classList.remove(...classes);
-      nodeDiv.classList.add(status); // Status itself is added as the class
+      // Status itself is added as the class
+      nodeDiv.classList.add(status);
     }
   }
 
-  setNodesStatus = () => {
+  setNodesStatus() {
     if (R.isNil(this.props.nodes_status) | R.isEmpty(this.props.nodes_status)) {
       return
     }
@@ -469,7 +504,7 @@ class FlowfuncClass extends Component {
 
 
 
-  addEventListners = () => {
+  addEventListners() {
     const comp = this;
     const stage = this.container.current
     var containerEventListenerAdded = stage.getAttribute("data-event-click");
@@ -478,12 +513,12 @@ class FlowfuncClass extends Component {
         // console.log("Clicked", e);
         if (!e.ctrlKey) {
           comp.localSelectedNodes = new Set();
-          for (const [id, node] of Object.entries(comp.props.nodes)) {
+          for (const [id] of Object.entries(comp.props.nodes)) {
             try {
               const nodeDiv = stage.querySelector('[data-node-id = "' + id + '"]');
               nodeDiv.classList.remove("active")
             } catch (error) {
-              // console.log("error", error, node);
+              // console.log("error", error);
             }
           }
         }
@@ -520,23 +555,31 @@ class FlowfuncClass extends Component {
     }
   }
 
-  applyNodeLabels = () => {
+  applyNodeLabels() {
     try {
-      if (!this.container || !this.container.current) return;
+      if (!this.container || !this.container.current) {
+        return;
+      }
       const labels = this.nodeLabels || {};
       for (const [nid, lbl] of Object.entries(labels)) {
-        if (!lbl) continue;
+        if (!lbl) {
+          continue;
+        }
         const nodeDiv = this.container.current.querySelector('[data-node-id="' + nid + '"]');
-        if (!nodeDiv) continue;
+        if (!nodeDiv) {
+          continue;
+        }
         const header = nodeDiv.querySelector('h2');
         if (header && header.textContent !== lbl) {
           header.textContent = lbl;
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      void e;
+    }
   }
 
-  dismissContextMenus = () => {
+  dismissContextMenus() {
     try {
       const sels = [
         '[data-flume-component="context-menu"]',
@@ -551,7 +594,9 @@ class FlowfuncClass extends Component {
           try {
             el.style.display = 'none';
             el.setAttribute('aria-hidden', 'true');
-          } catch (e) {}
+          } catch (e) {
+            void e;
+          }
         }
       }
       const stray = Array.from(document.querySelectorAll('div,span'));
@@ -561,7 +606,9 @@ class FlowfuncClass extends Component {
           try {
             el.style.display = 'none';
             el.setAttribute('aria-hidden', 'true');
-          } catch (e) {}
+          } catch (e) {
+            void e;
+          }
         }
       }
       // Remove any native tooltip sources
@@ -569,29 +616,51 @@ class FlowfuncClass extends Component {
       for (const el of titled) {
         const val = el.getAttribute('title');
         if (val && val.trim() === 'Node Options') {
-          try { el.removeAttribute('title'); } catch (e) {}
+          try {
+            el.removeAttribute('title');
+          } catch (e) {
+            void e;
+          }
         }
       }
       const aria = Array.from(document.querySelectorAll('[aria-label]'));
       for (const el of aria) {
         const val = el.getAttribute('aria-label');
         if (val && val.trim() === 'Node Options') {
-          try { el.removeAttribute('aria-label'); } catch (e) {}
+          try {
+            el.removeAttribute('aria-label');
+          } catch (e) {
+            void e;
+          }
         }
       }
       // Nudge the browser tooltip to disappear
-      try { document.body.dispatchEvent(new MouseEvent('mousemove', {bubbles: true, clientX: 0, clientY: 0})); } catch (e) {}
-    } catch (e) {}
+      try {
+        document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 0, clientY: 0 }));
+      } catch (e) {
+        void e;
+      }
+    } catch (e) {
+      void e;
+    }
   }
 
-  openRenameEditorForNode = (nodeId) => {
+  openRenameEditorForNode(nodeId) {
     try {
-      try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); } catch (e) {}
+      try {
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+      } catch (e) {
+        void e;
+      }
       this.dismissContextMenus();
       const nodeDiv = this.container.current.querySelector('[data-node-id="' + nodeId + '"]');
-      if (!nodeDiv) return;
+      if (!nodeDiv) {
+        return;
+      }
       const header = nodeDiv.querySelector('h2');
-      if (!header) return;
+      if (!header) {
+        return;
+      }
       const original = header.textContent || '';
       const initial = this.nodeLabels[nodeId] || original || '';
       header.setAttribute('contenteditable', 'true');
@@ -605,52 +674,80 @@ class FlowfuncClass extends Component {
         range.setStart(node, 0);
         range.setEnd(node, (header.textContent || '').length);
       } catch (err) {
-        try { range.selectNodeContents(header); } catch (e) {}
+        void err;
+        try {
+          range.selectNodeContents(header);
+        } catch (e) {
+          void e;
+        }
       }
       const sel = window.getSelection();
-      if (sel) { sel.removeAllRanges(); sel.addRange(range); }
-      const commit = () => {
-        const newVal = (header.textContent || '').trim();
-        header.removeAttribute('contenteditable');
-        if (newVal && newVal !== original) {
-          this.nodeLabels[nodeId] = newVal;
-          this.applyNodeLabels();
-          try { this.props.setProps && this.props.setProps({ node_labels: { ...this.nodeLabels } }); } catch (e) {}
-        } else {
-          header.textContent = original;
-        }
-        header.removeEventListener('blur', onBlur);
-        header.removeEventListener('keydown', onKey);
-      };
-      const cancel = () => {
-        header.removeAttribute('contenteditable');
-        header.textContent = original;
-        header.removeEventListener('blur', onBlur);
-        header.removeEventListener('keydown', onKey);
-      };
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+
+      const comp = this;
+
       const onBlur = () => commit();
       const onKey = (ev) => {
         if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
         if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
       };
+
+      function commit() {
+        const newVal = (header.textContent || '').trim();
+        header.removeAttribute('contenteditable');
+        if (newVal && newVal !== original) {
+          comp.nodeLabels[nodeId] = newVal;
+          comp.applyNodeLabels();
+          try {
+            if (comp.props.setProps) {
+              comp.props.setProps({ node_labels: { ...comp.nodeLabels } });
+            }
+          } catch (e) {
+            void e;
+          }
+        } else {
+          header.textContent = original;
+        }
+        header.removeEventListener('blur', onBlur);
+        header.removeEventListener('keydown', onKey);
+      }
+      function cancel() {
+        header.removeAttribute('contenteditable');
+        header.textContent = original;
+        header.removeEventListener('blur', onBlur);
+        header.removeEventListener('keydown', onKey);
+      }
       header.addEventListener('blur', onBlur);
       header.addEventListener('keydown', onKey);
-    } catch (e) {}
+    } catch (e) {
+      void e;
+    }
   }
 
-  injectRenameItems = () => {
+  injectRenameItems() {
     try {
       // Try to find Flume's context menu container
-      let menu = document.querySelector('[data-flume-component="context-menu"]');
+      let menu = null;
+      const menus = Array.from(document.querySelectorAll('[data-flume-component="ctx-menu"]'));
+      if (menus.length) {
+        menu = menus[menus.length - 1];
+      }
       if (!menu) {
         const candidates = Array.from(document.querySelectorAll('div[class*="ContextMenu"], [data-flume-component="menu"], [data-flume-component="contextmenu"]'));
-        if (candidates.length) menu = candidates[candidates.length - 1];
+        if (candidates.length) {
+          menu = candidates[candidates.length - 1];
+        }
       }
-      if (!menu) return;
+      if (!menu) {
+        return;
+      }
 
       // Determine the list container and sample item class
-      let list = menu.querySelector('ul') || menu;
-      const sample = list.firstElementChild;
+      const list = menu.querySelector('[data-flume-component="ctx-menu-list"]') || menu.querySelector('ul') || menu;
+      const sample = list.querySelector('[data-flume-component="ctx-menu-option"]') || list.firstElementChild;
       const itemTag = (list.tagName || '').toLowerCase() === 'ul' ? 'li' : 'div';
 
       // Try to detect the description styling from the built-in Delete item
@@ -663,40 +760,67 @@ class FlowfuncClass extends Component {
             if (cand) { descProto = cand; break; }
           }
         }
-      } catch (e) {}
+      } catch (e) {
+        void e;
+      }
 
       const ensureItem = (key, label, handler, descText) => {
-        if (list.querySelector('[data-ff-action="' + key + '"]')) return;
+        if (list.querySelector('[data-ff-action="' + key + '"]')) {
+          return;
+        }
         const el = document.createElement(itemTag);
-        if (sample && sample.className) el.className = sample.className;
+        if (sample && sample.className) {
+          el.className = sample.className;
+        }
         el.setAttribute('data-ff-action', key);
+        el.setAttribute('data-flume-component', 'ctx-menu-option');
+        el.setAttribute('role', 'menuitem');
         el.style.cursor = 'pointer';
-        if (!el.textContent) el.textContent = label;
+        const labelEl = document.createElement('label');
+        labelEl.textContent = label;
+        el.appendChild(labelEl);
         el.addEventListener('click', (ev) => {
           ev.stopPropagation();
-          try { ev.preventDefault(); } catch (e) {}
-          try { if (menu && menu.style) menu.style.display = 'none'; } catch (e) {}
-          try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); } catch (e) {}
+          try {
+            ev.preventDefault();
+          } catch (e) {
+            void e;
+          }
+          try {
+            if (menu && menu.style) {
+              menu.style.display = 'none';
+            }
+          } catch (e) {
+            void e;
+          }
+          try {
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+          } catch (e) {
+            void e;
+          }
           this.dismissContextMenus();
           setTimeout(() => this.dismissContextMenus(), 0);
-          setTimeout(() => this.dismissContextMenus(), 50);
+          setTimeout(() => this.dismissContextMenus(), DISMISS_CONTEXT_MENU_DELAY_MS);
           const nid = this._lastContextNodeId;
           handler(nid);
         });
         // Insert at top to make it visible immediately
-        if (list.firstChild) list.insertBefore(el, list.firstChild); else list.appendChild(el);
+        if (list.firstChild) {
+          list.insertBefore(el, list.firstChild);
+        } else {
+          list.appendChild(el);
+        }
 
         // Add description (clone style from Delete Node item if possible)
         if (descText) {
           let descEl;
           if (descProto) {
-            descEl = document.createElement(descProto.tagName || 'div');
-            if (descProto.className) descEl.className = descProto.className;
+            descEl = document.createElement(descProto.tagName || 'p');
+            if (descProto.className) {
+              descEl.className = descProto.className;
+            }
           } else {
-            descEl = document.createElement('div');
-            descEl.style.opacity = '0.7';
-            descEl.style.fontSize = '12px';
-            descEl.style.marginTop = '2px';
+            descEl = document.createElement('p');
           }
           descEl.textContent = descText;
           el.appendChild(descEl);
@@ -704,9 +828,13 @@ class FlowfuncClass extends Component {
       };
 
       ensureItem('rename-node', 'Rename node', (nid) => {
-        if (nid) setTimeout(() => this.openRenameEditorForNode(nid), 0);
+        if (nid) {
+          setTimeout(() => this.openRenameEditorForNode(nid), 0);
+        }
       }, 'Renames the node\'s display label.');
-    } catch (e) {}
+    } catch (e) {
+      void e;
+    }
   }
 
 
@@ -938,7 +1066,8 @@ FlowfuncClass.propTypes = {
    * Dash-assigned callback that should be called to report property changes
    * to Dash, to make them available for callbacks.
    */
-  setProps: PropTypes.func
+  setProps: PropTypes.func,
+  containerRef: PropTypes.object
 };
 
 // Copy PropTypes to wrapper component

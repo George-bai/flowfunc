@@ -39,3 +39,7 @@
 .canceled[data-flume-component="node"] {
     border-bottom: 5px solid rgb(107, 109, 94);
 }
+
+[data-flume-component="ctx-menu-option"][data-ff-action="rename-node"] + [data-flume-component="ctx-menu-option"] {
+    padding-top: 8px;
+}

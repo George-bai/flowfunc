@@ -1,6 +1,6 @@
 import pytest
 from flowfunc.config import Config
-from flowfunc.models import Node
+from flowfunc.models import Node, Port
 from .methods import (
     add_str_inspect,
     add_str_type,
@@ -98,3 +98,21 @@ def test_optional():
     assert config.ports[0].type == "str"
     assert len(config.ports[0].controls) == 1
     assert config.ports[0].controls[0].type == "str"
+
+
+def test_extra_nodes_ports_included():
+    def passthrough(value: float) -> float:
+        return value
+
+    extra_node = Node(
+        type="tests.extra.passthrough",
+        label="Passthrough",
+        method=passthrough,
+        inputs=[Port(type="float", name="value", label="value")],
+        outputs=[Port(type="float", name="result", label="result")],
+    )
+
+    config = Config.from_function_list([add_with_type_anno], extra_nodes=[extra_node])
+    config_dict = config.dict()
+    port_types = {p["type"] for p in config_dict["portTypes"]}
+    assert "float" in port_types
