@@ -639,7 +639,10 @@ class JobRunner:
                 proc = mp.Process(target=_ff_proc_call, args=(method, input_args, result_q))
                 self._active_node_procs[nodeid] = proc
                 proc.start()
+                method_output = None
+                got_result = False
                 try:
+                    # Drain queue while process runs to prevent put() blocking on full pipe
                     while proc.is_alive():
                         if self.is_cancel_requested():
                             try:
@@ -649,12 +652,23 @@ class JobRunner:
                                 pass
                             self._active_node_procs.pop(nodeid, None)
                             raise asyncio.CancelledError()
+                        try:
+                            method_output = result_q.get_nowait()
+                            got_result = True
+                        except Exception:
+                            pass
                         await asyncio.sleep(0.05)
                 finally:
                     self._active_node_procs.pop(nodeid, None)
-                if proc.exitcode and proc.exitcode != 0 and result_q.empty():
+                # After process exits, drain any remaining result from queue
+                if not got_result:
+                    try:
+                        method_output = result_q.get(timeout=1.0)
+                        got_result = True
+                    except Exception:
+                        pass
+                if proc.exitcode and proc.exitcode != 0 and not got_result:
                     raise RuntimeError(f"Process exited with code {proc.exitcode}")
-                method_output = result_q.get() if not result_q.empty() else None
             else:
                 method_output = validate_call(config=ConfigDict(arbitrary_types_allowed=True))(method)(**input_args)
         if not isinstance(method_output, tuple):
@@ -1286,7 +1300,9 @@ class JobRunner:
                     t_start = time.perf_counter()
                     proc.start()
                     last_log = t_start
-                    # Poll for cancel while process is running
+                    method_output = None
+                    got_result = False
+                    # Poll for cancel while process is running, also drain queue to prevent deadlock
                     while proc.is_alive():
                         if self.is_cancel_requested():
                             try:
@@ -1298,17 +1314,29 @@ class JobRunner:
                             self._active_node_procs.pop(nodeid, None)
                             out_node.run_event.set()
                             return
+                        # Drain queue while process runs to prevent put() blocking on full pipe
+                        try:
+                            method_output = result_q.get_nowait()
+                            got_result = True
+                        except Exception:
+                            pass
                         now = time.perf_counter()
                         if (now - last_log) > 0.5:
                             last_log = now
                         await asyncio.sleep(0.05)
                     self._active_node_procs.pop(nodeid, None)
-                    if proc.exitcode and proc.exitcode != 0 and result_q.empty():
+                    # After process exits, drain any remaining result from queue
+                    if not got_result:
+                        try:
+                            method_output = result_q.get(timeout=1.0)
+                            got_result = True
+                        except Exception:
+                            pass
+                    if proc.exitcode and proc.exitcode != 0 and not got_result:
                         out_node.error = RuntimeError(f"Process exited with code {proc.exitcode}")
                         out_node.status = "failed"
                         out_node.run_event.set()
                         return
-                    method_output = result_q.get() if not result_q.empty() else None
                 else:
                     method_output = validate_call(
                         config=ConfigDict(arbitrary_types_allowed=True)

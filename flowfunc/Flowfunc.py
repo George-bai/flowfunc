@@ -1,6 +1,21 @@
 # AUTO GENERATED FILE - DO NOT EDIT
 
+import typing  # noqa: F401
+from typing_extensions import TypedDict, NotRequired, Literal # noqa: F401
 from dash.development.base_component import Component, _explicitize_args
+
+ComponentType = typing.Union[
+    str,
+    int,
+    float,
+    Component,
+    None,
+    typing.Sequence[typing.Union[str, int, float, Component, None]],
+]
+
+NumberType = typing.Union[
+    typing.SupportsFloat, typing.SupportsInt, typing.SupportsComplex
+]
 
 
 class Flowfunc(Component):
@@ -28,6 +43,9 @@ Keyword arguments:
 - default_nodes (list; optional):
     Default nodes present in the editor  A list of nodes from the
     config.
+
+- disable_focus (boolean; optional):
+    Disable automatic focusing behavior in the editor (Flume 1.1.0).
 
 - disable_pan (boolean; optional):
     Disable zoom option.
@@ -57,20 +75,38 @@ Keyword arguments:
 - space_to_pan (boolean; optional):
     Disable zoom option.
 
-- style (dict; optional):
-    The style of the container div.
-
 - type_safety (boolean; optional):
     If any port can connect to any other port."""
     _children_props = []
     _base_nodes = ['children']
     _namespace = 'flowfunc'
     _type = 'Flowfunc'
-    @_explicitize_args
-    def __init__(self, id=Component.UNDEFINED, style=Component.UNDEFINED, nodes=Component.UNDEFINED, nodes_status=Component.UNDEFINED, editor_status=Component.UNDEFINED, selected_nodes=Component.UNDEFINED, double_clicked_node=Component.UNDEFINED, comments=Component.UNDEFINED, type_safety=Component.UNDEFINED, default_nodes=Component.UNDEFINED, context=Component.UNDEFINED, initial_scale=Component.UNDEFINED, disable_zoom=Component.UNDEFINED, disable_pan=Component.UNDEFINED, space_to_pan=Component.UNDEFINED, config=Component.UNDEFINED, **kwargs):
-        self._prop_names = ['id', 'comments', 'config', 'context', 'default_nodes', 'disable_pan', 'disable_zoom', 'double_clicked_node', 'editor_status', 'initial_scale', 'nodes', 'nodes_status', 'selected_nodes', 'space_to_pan', 'style', 'type_safety']
+
+
+    def __init__(
+        self,
+        id: typing.Optional[typing.Union[str, dict]] = None,
+        style: typing.Optional[typing.Any] = None,
+        nodes: typing.Optional[dict] = None,
+        nodes_status: typing.Optional[dict] = None,
+        editor_status: typing.Optional[str] = None,
+        selected_nodes: typing.Optional[typing.Sequence] = None,
+        double_clicked_node: typing.Optional[str] = None,
+        comments: typing.Optional[dict] = None,
+        type_safety: typing.Optional[bool] = None,
+        default_nodes: typing.Optional[typing.Sequence] = None,
+        context: typing.Optional[dict] = None,
+        initial_scale: typing.Optional[NumberType] = None,
+        disable_zoom: typing.Optional[bool] = None,
+        disable_pan: typing.Optional[bool] = None,
+        space_to_pan: typing.Optional[bool] = None,
+        disable_focus: typing.Optional[bool] = None,
+        config: typing.Optional[dict] = None,
+        **kwargs
+    ):
+        self._prop_names = ['id', 'comments', 'config', 'context', 'default_nodes', 'disable_focus', 'disable_pan', 'disable_zoom', 'double_clicked_node', 'editor_status', 'initial_scale', 'nodes', 'nodes_status', 'selected_nodes', 'space_to_pan', 'style', 'type_safety']
         self._valid_wildcard_attributes =            []
-        self.available_properties = ['id', 'comments', 'config', 'context', 'default_nodes', 'disable_pan', 'disable_zoom', 'double_clicked_node', 'editor_status', 'initial_scale', 'nodes', 'nodes_status', 'selected_nodes', 'space_to_pan', 'style', 'type_safety']
+        self.available_properties = ['id', 'comments', 'config', 'context', 'default_nodes', 'disable_focus', 'disable_pan', 'disable_zoom', 'double_clicked_node', 'editor_status', 'initial_scale', 'nodes', 'nodes_status', 'selected_nodes', 'space_to_pan', 'style', 'type_safety']
         self.available_wildcard_properties =            []
         _explicit_args = kwargs.pop('_explicit_args')
         _locals = locals()
@@ -78,3 +114,5 @@ Keyword arguments:
         args = {k: _locals[k] for k in _explicit_args}
 
         super(Flowfunc, self).__init__(**args)
+
+setattr(Flowfunc, "__init__", _explicitize_args(Flowfunc.__init__))

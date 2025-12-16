@@ -249,9 +249,9 @@ def ports_from_nodes(nodes: List[Node]) -> List[Port]:
     """Function to find unique port types that are used in all nodes"""
     ports_: List[Port] = []
     for node in nodes:
-        if node.inputs:
+        if isinstance(node.inputs, list):
             ports_ += [p for p in node.inputs if isinstance(p, Port)]
-        if node.outputs:
+        if isinstance(node.outputs, list):
             ports_ += [p for p in node.outputs if isinstance(p, Port)]
     ports = []
     for port_ in ports_:
@@ -331,8 +331,8 @@ class Config:
             extra_nodes = []
         if extra_ports is None:
             extra_ports = []
-        ports = list(set(extra_ports + ports_from_nodes(nodes)))
         nodes = nodes + extra_nodes
+        ports = list(set(extra_ports + ports_from_nodes(nodes)))
         return cls(nodes, ports)
 
     def __init__(self, nodes, ports=None) -> None:
