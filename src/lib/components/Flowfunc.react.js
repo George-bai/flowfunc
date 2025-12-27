@@ -16,10 +16,6 @@ const FIT_TO_VIEW_STEP = 0.05;
 const FIT_TO_VIEW_DENOM_EPSILON = 1e-6;
 const FIT_TO_VIEW_WHEEL_SENSITIVITY = 0.005;
 
-// Module-level variable to persist view state across component remount
-// This is needed because changing the key prop creates a new component instance
-let _pendingRestoreTransform = null;
-
 /**
  * Flowfunc: A node editor for dash
  * This component gives a flow based programming interface for dash users.
@@ -446,31 +442,31 @@ class FlowfuncClass extends Component {
     this.addEventListners();
     // console.log("Adding listeners")
     this.applyNodeLabels();
-
-    // Restore view state if pending from a server-triggered remount
-    if (_pendingRestoreTransform) {
-      const savedTransform = _pendingRestoreTransform;
-      _pendingRestoreTransform = null;
-      // Use requestAnimationFrame to ensure the NodeEditor is fully mounted
-      requestAnimationFrame(() => {
-        const api = this.nodeEditor && this.nodeEditor.current;
-        if (api && typeof api.setStageTransform === 'function') {
-          api.setStageTransform(savedTransform);
-        }
-      });
-    }
   }
 
   componentDidUpdate(prevProps) {
     if (this.props.config !== prevProps.config) {
       this.updateConfig();
     }
-    if (this.props.editor_status === "server") {
-      // console.log("Pushing new nodes", this.props.nodes)
-      // Capture current view state before key change triggers remount
+
+    // Restore view state after NodeEditor has remounted (after ukey change was rendered)
+    if (this._pendingViewRestore) {
+      const savedTransform = this._pendingViewRestore;
+      this._pendingViewRestore = null;
+      // Apply synchronously to minimize visual flicker
+      const api = this.nodeEditor && this.nodeEditor.current;
+      if (api && typeof api.setStageTransform === 'function') {
+        api.setStageTransform(savedTransform);
+      }
+    }
+
+    // Only capture on TRANSITION to "server" status (not when already "server")
+    if (this.props.editor_status === "server" && prevProps.editor_status !== "server") {
+      // Capture current view state before key change triggers NodeEditor remount
       const api = this.nodeEditor && this.nodeEditor.current;
       if (api && typeof api.getStageState === 'function') {
-        _pendingRestoreTransform = api.getStageState();
+        // Store on instance - will be restored in next componentDidUpdate after ukey change renders
+        this._pendingViewRestore = api.getStageState();
       }
       this.ukey = (Math.random() + 1).toString(RANDOM_KEY_RADIX).substring(RANDOM_KEY_SUBSTRING_START);
     }

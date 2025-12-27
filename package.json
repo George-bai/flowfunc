@@ -11,8 +11,7 @@
     "build:backends": "python -c \"import json, subprocess, os, os.path, dash; from dash.development.component_generator import generate_components; extract = os.path.join(os.path.dirname(dash.__file__), 'extract-meta.js'); env = os.environ.copy(); env['MODULES_PATH'] = os.path.abspath('./node_modules'); out = subprocess.check_output(['node', extract, '\\\\.test\\\\.', '^UNDEFINED$|^REQUIRED$|^to_plotly_json$|^available_properties$|^available_wildcard_properties$|^_.*$', './src/lib/components'], env=env); metadata = json.loads(out.decode('utf-8')); generate_components('./src/lib/components','flowfunc', package_info_filename='package-info.json', ignore='\\\\.test\\\\.', metadata=metadata)\"",
     "build:backends-activated": "(. venv/bin/activate || venv\\scripts\\activate && npm run build:py_and_r)",
     "build": "npm run build:js && npm run build:backends",
-    "build:activated": "npm run build:js && npm run build:backends-activated"
-    ,
+    "build:activated": "npm run build:js && npm run build:backends-activated",
     "patch:flume": "node scripts/patch-flume.js"
   },
   "author": "Najeem Muhammed <najeem@gmail.com>",
@@ -40,11 +39,11 @@
     "eslint-config-prettier": "^6.0.0",
     "eslint-plugin-import": "^2.26.0",
     "eslint-plugin-react": "^7.31.1",
+    "patch-package": "^8.0.0",
     "prop-types": "^15.7.2",
     "react": "^18.2.0",
     "react-docgen": "^4.1.1",
     "react-dom": "^18.2.0",
-    "patch-package": "^8.0.0",
     "style-loader": "^4.0.0",
     "styled-jsx": "^5.1.6",
     "terser-webpack-plugin": "^5.3.14",
