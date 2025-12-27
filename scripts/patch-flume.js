@@ -47,7 +47,7 @@ function patchFlume() {
 
   let didPatch = false;
   const src = fs.readFileSync(target, 'utf8');
-  if (src.includes('setStageTransform:')) {
+  if (src.includes('setStageTransform:') && src.includes('getStageState:')) {
     console.log('[patch-flume] NodeEditor already patched. Skipping:', target);
   } else {
     const needle = 'getComments: () => {';
@@ -64,7 +64,7 @@ function patchFlume() {
       process.exit(1);
     }
 
-    const insertion = ",\n        // Expose stage setters for external control (e.g., fit-to-view)\n        setStageTransform: ({ scale, translate }) => {\n            const s = clamp(typeof scale === \"number\" ? scale : stageState.scale, 0.1, 7);\n            const t = {\n                x: typeof (translate?.x) === \"number\" ? translate.x : stageState.translate.x,\n                y: typeof (translate?.y) === \"number\" ? translate.y : stageState.translate.y\n            };\n            dispatchStageState({ type: \"SET_TRANSLATE_SCALE\", scale: s, translate: t });\n        },\n        setScale: (scale) => {\n            const s = clamp(typeof scale === \"number\" ? scale : stageState.scale, 0.1, 7);\n            dispatchStageState({ type: \"SET_SCALE\", scale: s });\n        },\n        setTranslate: (translate) => {\n            const t = {\n                x: typeof (translate?.x) === \"number\" ? translate.x : stageState.translate.x,\n                y: typeof (translate?.y) === \"number\" ? translate.y : stageState.translate.y\n            };\n            dispatchStageState({ type: \"SET_TRANSLATE\", translate: t });\n        }";
+    const insertion = ",\n        // Expose stage getters and setters for external control (e.g., fit-to-view, view persistence)\n        getStageState: () => ({\n            scale: stageState.scale,\n            translate: { x: stageState.translate.x, y: stageState.translate.y }\n        }),\n        setStageTransform: ({ scale, translate }) => {\n            const s = clamp(typeof scale === \"number\" ? scale : stageState.scale, 0.1, 7);\n            const t = {\n                x: typeof (translate?.x) === \"number\" ? translate.x : stageState.translate.x,\n                y: typeof (translate?.y) === \"number\" ? translate.y : stageState.translate.y\n            };\n            dispatchStageState({ type: \"SET_TRANSLATE_SCALE\", scale: s, translate: t });\n        },\n        setScale: (scale) => {\n            const s = clamp(typeof scale === \"number\" ? scale : stageState.scale, 0.1, 7);\n            dispatchStageState({ type: \"SET_SCALE\", scale: s });\n        },\n        setTranslate: (translate) => {\n            const t = {\n                x: typeof (translate?.x) === \"number\" ? translate.x : stageState.translate.x,\n                y: typeof (translate?.y) === \"number\" ? translate.y : stageState.translate.y\n            };\n            dispatchStageState({ type: \"SET_TRANSLATE\", translate: t });\n        }";
 
     const beforeText = src.slice(0, after + 1);
     const afterText = src.slice(after + 1);

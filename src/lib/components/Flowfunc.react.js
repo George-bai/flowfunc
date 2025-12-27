@@ -16,6 +16,10 @@ const FIT_TO_VIEW_STEP = 0.05;
 const FIT_TO_VIEW_DENOM_EPSILON = 1e-6;
 const FIT_TO_VIEW_WHEEL_SENSITIVITY = 0.005;
 
+// Module-level variable to persist view state across component remount
+// This is needed because changing the key prop creates a new component instance
+let _pendingRestoreTransform = null;
+
 /**
  * Flowfunc: A node editor for dash
  * This component gives a flow based programming interface for dash users.
@@ -26,10 +30,10 @@ const FIT_TO_VIEW_WHEEL_SENSITIVITY = 0.005;
 // Wrapper component to use hooks with class component
 const FlowfuncWithPortHighlighter = (props) => {
   const containerRef = React.useRef(null);
-  
+
   // Use the port highlighter hook properly
   usePortHighlighter(props.config, props.nodes, props.type_safety, containerRef);
-  
+
   return <FlowfuncClass {...props} containerRef={containerRef} />;
 };
 
@@ -189,7 +193,7 @@ class FlowfuncClass extends Component {
   createDisplayNodePorts(ports, inputData, connections, _context) {
     // Auto-expanding display node with compacting behavior
     const connected_ports = new Set();
-    
+
     if (connections.inputs) {
       for (const portName in connections.inputs) {
         if (portName.startsWith('input')) {
@@ -200,10 +204,10 @@ class FlowfuncClass extends Component {
         }
       }
     }
-    
+
     // Sort connected ports to maintain order
     const sorted_connected_ports = Array.from(connected_ports).sort((a, b) => a - b);
-    
+
     // Store compacting information for later use in handleChange
     if (sorted_connected_ports.length > 0) {
       // Check if we need to compact connections (if there are gaps)
@@ -214,34 +218,34 @@ class FlowfuncClass extends Component {
           break;
         }
       }
-      
+
       if (needsCompacting) {
         // Store the compacting information for handleChange to process
         this.pendingDisplayCompacting = {
           originalPorts: sorted_connected_ports,
-          targetPorts: Array.from({length: sorted_connected_ports.length}, (_, i) => i)
+          targetPorts: Array.from({ length: sorted_connected_ports.length }, (_, i) => i)
         };
       }
     }
-    
+
     const arr = [];
-    
+
     // Create sequential ports (compacted)
     for (let i = 0; i < sorted_connected_ports.length; i++) {
-      arr.push(ports.object({ 
+      arr.push(ports.object({
         name: `input${i}`,
         label: `Input ${i + 1} (connected)`,
         acceptTypes: ['str', 'int', 'float', 'bool', 'object', 'list', 'dict']
       }));
     }
-    
+
     // Add one empty port at the end
-    arr.push(ports.object({ 
-      name: `input${sorted_connected_ports.length}`, 
+    arr.push(ports.object({
+      name: `input${sorted_connected_ports.length}`,
       label: `Input ${sorted_connected_ports.length + 1}`,
       acceptTypes: ['str', 'int', 'float', 'bool', 'object', 'list', 'dict']
     }));
-    
+
     return arr;
   }
 
@@ -290,24 +294,24 @@ class FlowfuncClass extends Component {
           node_obj.inputs = () => () => [];
         }
         else if (R.hasIn("path", inputs)) {
-          try{
+          try {
             node_obj.inputs = ports => (inputData, connections, context) => {
               // Check if it's the display node
               if (inputs.path === "utils.toolnodes.display") {
                 // Embedded display node dynamic port logic
                 return this.createDisplayNodePorts(ports, inputData, connections, context);
               }
-              
+
               // For other dynamic functions, try to find them in window
               const func = (window.dash_clientside && window.dash_clientside.flowfunc && window.dash_clientside.flowfunc[inputs.path]);
               if (!func) {
                 return [];
               }
-              
+
               return func(ports, inputData, connections, context, Controls);
             }
           }
-          catch (e){
+          catch (e) {
             // Handle errors silently
             void e;
           }
@@ -362,11 +366,11 @@ class FlowfuncClass extends Component {
   handleChange() {
     // Get current nodes before processing
     const currentNodes = this.nodeEditor.current.getNodes();
-    
+
     // Handle display node compacting if needed
     if (this.pendingDisplayCompacting) {
       const { originalPorts, targetPorts } = this.pendingDisplayCompacting;
-      
+
       // Find all display nodes that need compacting
       for (const [nodeId, node] of Object.entries(currentNodes)) {
         if (node.type === "utils.toolnodes.display") {
@@ -375,7 +379,7 @@ class FlowfuncClass extends Component {
           for (let i = 0; i < originalPorts.length; i++) {
             portMapping[`input${originalPorts[i]}`] = `input${targetPorts[i]}`;
           }
-          
+
           // Update connections for this display node
           if (node.connections && node.connections.inputs) {
             const newInputs = {};
@@ -391,7 +395,7 @@ class FlowfuncClass extends Component {
             }
             node.connections.inputs = newInputs;
           }
-          
+
           // Also need to update all outgoing connections TO this display node
           for (const [, otherNode] of Object.entries(currentNodes)) {
             if (otherNode.connections && otherNode.connections.outputs) {
@@ -419,14 +423,14 @@ class FlowfuncClass extends Component {
           }
         }
       }
-      
+
       // Clear the pending compacting
       this.pendingDisplayCompacting = null;
-      
+
       // Schedule a re-render after the current update cycle
       this.needsForceRerender = true;
     }
-    
+
     // Dash function which will raise the nodes properties
     this.props.setProps({
       editor_status: "client",
@@ -442,6 +446,19 @@ class FlowfuncClass extends Component {
     this.addEventListners();
     // console.log("Adding listeners")
     this.applyNodeLabels();
+
+    // Restore view state if pending from a server-triggered remount
+    if (_pendingRestoreTransform) {
+      const savedTransform = _pendingRestoreTransform;
+      _pendingRestoreTransform = null;
+      // Use requestAnimationFrame to ensure the NodeEditor is fully mounted
+      requestAnimationFrame(() => {
+        const api = this.nodeEditor && this.nodeEditor.current;
+        if (api && typeof api.setStageTransform === 'function') {
+          api.setStageTransform(savedTransform);
+        }
+      });
+    }
   }
 
   componentDidUpdate(prevProps) {
@@ -450,10 +467,15 @@ class FlowfuncClass extends Component {
     }
     if (this.props.editor_status === "server") {
       // console.log("Pushing new nodes", this.props.nodes)
+      // Capture current view state before key change triggers remount
+      const api = this.nodeEditor && this.nodeEditor.current;
+      if (api && typeof api.getStageState === 'function') {
+        _pendingRestoreTransform = api.getStageState();
+      }
       this.ukey = (Math.random() + 1).toString(RANDOM_KEY_RADIX).substring(RANDOM_KEY_SUBSTRING_START);
     }
 
-    
+
     // Handle forced re-render after compacting
     if (this.needsForceRerender) {
       this.needsForceRerender = false;
@@ -463,12 +485,12 @@ class FlowfuncClass extends Component {
       // Generate new key to force React re-render
       this.ukey = (Math.random() + 1).toString(RANDOM_KEY_RADIX).substring(RANDOM_KEY_SUBSTRING_START);
     }
-    
+
     this.setNodesStatus();
 
     // Programmatic fit-to-view trigger from Dash
     if (this.props.fit_to_view_request !== prevProps.fit_to_view_request &&
-        typeof this.props.fit_to_view_request !== 'undefined') {
+      typeof this.props.fit_to_view_request !== 'undefined') {
       this.fitToView();
     }
     // Sync node labels from Dash if they changed
@@ -861,7 +883,7 @@ class FlowfuncClass extends Component {
             key={this.ukey}
           />
         </div>
-        <div 
+        <div
           style={{
             position: 'fixed',
             bottom: '20px',
@@ -895,10 +917,10 @@ class FlowfuncClass extends Component {
             title={this.props.disable_zoom ? "Enable Zoom" : "Disable Zoom"}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M20 20L16 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M11 8V14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M8 11H14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M20 20L16 16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M11 8V14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M8 11H14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
 
@@ -921,11 +943,11 @@ class FlowfuncClass extends Component {
             title={this.props.disable_pan ? "Enable Pan" : "Disable Pan"}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M9 11.5V5.5C9 4.67157 9.67157 4 10.5 4C11.3284 4 12 4.67157 12 5.5V11" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              <path d="M12 11V7.5C12 6.67157 12.6716 6 13.5 6C14.3284 6 15 6.67157 15 7.5V11" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              <path d="M15 11V9.5C15 8.67157 15.6716 8 16.5 8C17.3284 8 18 8.67157 18 9.5V14.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              <path d="M6 12.4V14.5C6 17.5376 8.46243 20 11.5 20H12.5C15.5376 20 18 17.5376 18 14.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              <path d="M6 12.5C6 11.6716 6.67157 11 7.5 11C8.32843 11 9 11.6716 9 12.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              <path d="M9 11.5V5.5C9 4.67157 9.67157 4 10.5 4C11.3284 4 12 4.67157 12 5.5V11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              <path d="M12 11V7.5C12 6.67157 12.6716 6 13.5 6C14.3284 6 15 6.67157 15 7.5V11" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              <path d="M15 11V9.5C15 8.67157 15.6716 8 16.5 8C17.3284 8 18 8.67157 18 9.5V14.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              <path d="M6 12.4V14.5C6 17.5376 8.46243 20 11.5 20H12.5C15.5376 20 18 17.5376 18 14.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+              <path d="M6 12.5C6 11.6716 6.67157 11 7.5 11C8.32843 11 9 11.6716 9 12.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
             </svg>
           </button>
 
@@ -948,10 +970,10 @@ class FlowfuncClass extends Component {
             title={'Fit to View'}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M4 9V5H8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M16 5H20V9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M20 15V19H16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              <path d="M8 19H4V15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M4 9V5H8" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M16 5H20V9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M20 15V19H16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M8 19H4V15" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
 

@@ -1,7 +1,7 @@
 diff --git a/node_modules/flume/dist/NodeEditor.js b/node_modules/flume/dist/NodeEditor.js
 --- a/node_modules/flume/dist/NodeEditor.js
 +++ b/node_modules/flume/dist/NodeEditor.js
-@@ -53,8 +53,28 @@
+@@ -53,8 +53,34 @@
 -    React.useImperativeHandle(ref, () => ({
 -        getNodes: () => {
 -            return nodes;
@@ -17,7 +17,11 @@ diff --git a/node_modules/flume/dist/NodeEditor.js b/node_modules/flume/dist/Nod
 +        getComments: () => {
 +            return comments;
 +        },
-+        // Expose stage setters for external control (e.g., fit-to-view)
++        // Expose stage getters and setters for external control (e.g., fit-to-view, view persistence)
++        getStageState: () => ({
++            scale: stageState.scale,
++            translate: { x: stageState.translate.x, y: stageState.translate.y }
++        }),
 +        setStageTransform: ({ scale, translate }) => {
 +            const s = clamp(typeof scale === "number" ? scale : stageState.scale, 0.1, 7);
 +            const t = {
